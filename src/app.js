@@ -81,55 +81,7 @@ function watchProperty(obj, property, timeout, defaultValue) {
 }
 
 // this will create a new game instance and store them into the game_instances object
-// returns the new game instance port
-// async function createGameInstance() {
-  
-//   // the default return is a wait code of 1
-//   let new_game_instance_port = 1;
-
-//   // find the next port from possible PORTS list that does not already have a game instance
-//   let unused_ports = PORTS.filter( a => !game_instances.hasOwnProperty(a))
-
-//   if (Object.keys(unused_ports).length > 0) {
-//     new_game_instance_port = unused_ports[0];
-
-//     console.log("BEFORE runCommand");
-//     // run this script for the next port that doesn't have a game
-//     let command = "/home/ec2-user/rift_jumper_multiplayer_server_test.x86_64";
-
-//     await runCommand(command, [`--port=${new_game_instance_port}`]);
-    
-//   }
-//   else {
-//     return 1;
-//   }
-
-//   // game_instance object:
-//   // game_instance[PORTNUM] = {"players":0,"active":false, "healthy":false, "private":false, "private_code":0}
-//   // players: how many
-//   // active: the game is mid-session and players are playing
-//   // healthy: this server is alive and well
-//   // private: need a game code to join
-//   // private_code: host lobbies have a password
-
-//   // create the brains tracking object for each game instance
-//   game_instances[new_game_instance_port] = {"players":0,"active":false, "healthy":false, "private":false, "private_code":0};
-//   console.log("game_instances", game_instances);
-
-//   // listen to the active property for when the players are playing?
-//   return watchProperty(game_instances[new_game_instance_port], 'healthy', 5000, false).then((value) => {
-//       console.log('Healthy value:', value);
-//       console.log("new_game_instance_port", new_game_instance_port);
-//       if (value) {
-//         return new_game_instance_port;
-//       }
-//       else {
-//         return 1;
-//       }
-//   });
-
-// }
-
+// returns the new game instance port or 1 for wait
 async function createGameInstance() {
   // the default return is a wait code of 1
   let new_game_instance_port = 1;
@@ -148,6 +100,15 @@ async function createGameInstance() {
   } else {
       return 1;
   }
+
+
+  // game_instance object:
+  // game_instance[PORTNUM] = {"players":0,"active":false, "healthy":false, "private":false, "private_code":0}
+  // players: how many
+  // active: the game is mid-session and players are playing
+  // healthy: this server is alive and well
+  // private: need a game code to join
+  // private_code: host lobbies have a password
 
   // Initialize the game instance object
   game_instances[new_game_instance_port] = {
