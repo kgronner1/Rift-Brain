@@ -1,14 +1,16 @@
 ////// TO DO ///////
 
-// adjust the godot game instance build, probably also needs to be able to reject players who try to join when not healthy?
+// storage process
 
-// adjust the player instance build to send requests and handle codes like reject and wait
+// track usage
 
-// create the health check timer for each game instance
-
-// test creating and killing processes from node
+// listen for crash
 
 ////// TO DO ///////
+
+const { connectDB } = require('./db');
+const storage = require('./storage');
+//const networking = require('./networking');
 
 var express = require('express');
 var app = express();
@@ -30,12 +32,21 @@ const GAME_HEALTH_TIME = 90000;
 // master game instance object
 var game_instances = {};
 
-// we want this one listening on port 3000
-app.listen(3000, function () {
-  console.log('Rift brain listening on port 3000!');
-});
+async function startServer() {
+  await connectDB(); // Connect to Mongo first
 
+  storage.registerStorageRoutes(app);
+  //networking.registerNetworkingRoutes(app);
 
+  const PORT = 3000;
+  app.listen(PORT, () => {
+    console.log(`Rift brain listening on port ${PORT}!`);
+  });
+}
+
+startServer();
+
+// // // // // // // // // // // // // network functions // // // // // // // // // // // // //
 
 async function runCommand(command, args = [], cwd = '/home/ec2-user/') {
   return new Promise((resolve, reject) => {
@@ -241,7 +252,7 @@ function checkForJoinablePrivateGame(player_submitted_private_code) {
 
 }
 
-// // // // // // // // // // // // // player instance response api // // // // // // // // // // // // //
+// // // // // // // // // // // // // network player instance response api // // // // // // // // // // // // //
 
 app.get('/', function (req, res) {
   let x = 0;
@@ -342,7 +353,7 @@ app.get('/join', async function (req, res) {
 
 });
 
-// // // // // // // // // // // // // game instance response api // // // // // // // // // // // // //
+// // // // // // // // // // // // // network game instance response api // // // // // // // // // // // // //
 
 // to access these endpoints you need to be on the same server
 
