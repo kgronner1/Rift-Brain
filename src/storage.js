@@ -1,23 +1,67 @@
 // db import
 const { getDB } = require('./db');
+const bcrypt = require('bcryptjs');  // Import bcrypt for password hashing
 
 // // // // // // // // PLAYER STORAGE FUNCTIONS // // // // // // // //
 
 // accepts player is an object
-// returns true or false
+// returns 
 async function createPlayer(player) {
+  // Validate required fields
+  const requiredFields = ['device_id', 'name', 'ship_sprite', 'email', 'password'];
+  
+  for (const field of requiredFields) {
+    if (!player[field]) {
+      throw new Error(`Missing required field: ${field}`);
+    }
+  }
+
   // db store the player
-  const db = getDB();
-  const result = await db.collection('players').insertOne(player);
-  console.log('Player created with id:', result.insertedId);
-  return result.insertedId;
+  const db = getDB(); // Assuming getDB returns the database connection pool or connection object
+
+  // Hash the password before storing
+  const hashedPassword = await bcrypt.hash(player.password, 10);  // Hashing with a salt rounds of 10
+
+  // MySQL query to insert a new player
+  const query = `
+    INSERT INTO players (device_id, name, ship_sprite, available_sprites, points, unlocked_levels, email, password, created_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW());
+  `;
+
+  // Values to insert
+  const values = [
+    player.device_id,
+    player.name,
+    player.ship_sprite,
+    JSON.stringify([0,1,2]), // Convert array to JSON string
+    0,
+    0,
+    player.email,
+    hashedPassword,  // Storing hashed password
+  ];
+
+  try {
+    // Execute the query
+    const [result] = await db.execute(query, values);
+    
+    // Log the result (optional)
+    console.log(result);
+
+    // Return the player_id (assuming auto-increment)
+    return result.insertId; // The ID of the newly created player
+  } catch (error) {
+    // Handle any errors
+    console.error('Error creating player:', error);
+    throw error;
+  }
 }
+
 
 async function readPlayer(player_id) {
   const db = getDB();
-  const { ObjectId } = require('mongodb');
-  const player = await db.collection('players').findOne({ _id: new ObjectId(playerId) });
-  return player;
+  const [rows] = await db.query('SELECT * FROM users');
+  console.log(rows);
+  return result.insertedId;
 }
 
 async function updatePlayer(player) {
@@ -28,6 +72,42 @@ async function deletePlayer(player_id) {
 
 }
 
+
+// Function to check user login credentials
+async function loginPlayer(email, password) {
+  const db = getDB(); // Assuming getDB returns the database connection pool or connection object
+  
+  // Query to fetch the player by email (you can modify this if you use another field)
+  const query = `SELECT * FROM players WHERE email = ?`;
+  
+  try {
+    // Fetch the player from the database
+    const [rows] = await db.execute(query, [email]);
+    
+    if (rows.length === 0) {
+      // If no player found with this email
+      throw new Error('No player found with this email');
+    }
+
+    const player = rows[0]; // The first row is the matching player
+
+    // Compare the plain-text password with the stored hashed password
+    const isPasswordCorrect = await bcrypt.compare(password, player.password);
+
+    if (isPasswordCorrect) {
+      // If the password matches
+      console.log('Login successful');
+      return player; // Return the player data (or a session token, etc.)
+    } else {
+      // If the password doesn't match
+      throw new Error('Invalid password');
+    }
+  } catch (error) {
+    // Handle errors
+    console.error('Error during login:', error.message);
+    throw error;
+  }
+}
 
 // // // // // // // // GAME STORAGE FUNCTIONS // // // // // // // //
 
@@ -49,45 +129,6 @@ async function readLeaderboardMultiplayerGames() {
   // return players count #1 placements
   const db = getDB();
 
-  const topPlayers = await db.collection('games').aggregate([
-    {
-      $match: { placement: 1 }
-    },
-    {
-      $group: {
-        _id: "$player_id",
-        first_place_count: { $sum: 1 }
-      }
-    },
-    {
-      $lookup: {
-        from: "players",               // collection to join
-        localField: "_id",              // _id from games aggregation
-        foreignField: "player_id",      // player_id field in players
-        as: "player_info"               // output array
-      }
-    },
-    {
-      $unwind: "$player_info"           // since we expect exactly one match per player
-    },
-    {
-      $project: {
-        _id: 0,
-        player_id: "$_id",
-        first_place_count: 1,
-        name: "$player_info.name",
-        ship_sprite: "$player_info.ship_sprite"
-      }
-    },
-    {
-      $sort: { first_place_count: -1 }
-    },
-    {
-      $limit: 10
-    }
-  ]).toArray();
-
-  return topPlayers;
 }
 
 // // // // // // // // // // // // // storage response api // // // // // // // // // // // // //
