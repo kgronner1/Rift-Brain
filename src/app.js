@@ -2,6 +2,12 @@
 
 // storage process
 
+// make more functions and routes that make sense
+
+// login process
+
+// send emails / forgot password
+
 // track usage
 
 // listen for crash
@@ -14,6 +20,7 @@ const storage = require('./storage');
 
 var express = require('express');
 var app = express();
+app.use(express.json());
 
 // const { exec } = require('child_process');
 const { spawn } = require('child_process');
@@ -258,7 +265,6 @@ app.get('/', function (req, res) {
   let x = 0;
   res.status(200).send(JSON.stringify(x));
 });
-
 
 app.get('/join', async function (req, res) {
 
