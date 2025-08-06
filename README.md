@@ -16,3 +16,5 @@ docker run -p 3000:3000 -d rift-brain:1.0
 TO START SERVER ONLY:
 
 node ./src/app.js
+
+Must be done in Rift-Brain folder for .env reasons
