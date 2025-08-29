@@ -1,6 +1,8 @@
 // db import
 const { getDB } = require('./db');
 const bcrypt = require('bcryptjs');  // Import bcrypt for password hashing
+const fs = require('fs').promises;
+const path = require('path');
 
 // // // // // // // // USER STORAGE FUNCTIONS // // // // // // // //
 
@@ -27,7 +29,8 @@ async function createUser(user) {
   }
 
   // Load bad words list
-  const badWordsData = await fs.readFile('./bad_words.json', 'utf-8');
+  const filePath = path.join(__dirname, 'bad_words.json');
+  const badWordsData = await fs.readFile(filePath, 'utf-8');
   const badWords = JSON.parse(badWordsData).bad_words;
 
   // Check if username contains any bad word (case-insensitive)
@@ -531,7 +534,8 @@ function registerStorageRoutes(app) {
 
   app.post('/app_version_compatibility', async function (req, res) {
 
-    const app_versions = await fs.readFile("./app_versions.json", "utf-8");
+    const filePath = path.join(__dirname, 'app_versions.json');
+    const app_versions = await fs.readFile(filePath, 'utf-8');
 
     res.status(200).json({
       success: true,
