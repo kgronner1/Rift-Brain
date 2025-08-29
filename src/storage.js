@@ -49,7 +49,21 @@ async function createUser(user) {
   );
 
   if (existing.length > 0) {
-    throw new Error(`Username "${user.username}" is already taken`);
+    throw new Error(`This username "${user.username}" is already taken.`);
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(user.email)) {
+    throw new Error(`Invalid email format: ${user.email}`);
+  }
+
+  // Check if email already exists
+  const [existingEmail] = await db.execute(
+    `SELECT user_id FROM users WHERE email = ? LIMIT 1;`,
+    [user.email]
+  );
+  if (existingEmail.length > 0) {
+    throw new Error(`This email is already registered.`);
   }
 
   // Hash the password before storing
