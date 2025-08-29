@@ -26,8 +26,31 @@ async function createUser(user) {
     }
   }
 
+  // Load bad words list
+  const badWordsData = await fs.readFile('./bad_words.json', 'utf-8');
+  const badWords = JSON.parse(badWordsData).bad_words;
+
+  // Check if username contains any bad word (case-insensitive)
+  const lowerUsername = user.username.toLowerCase();
+  for (const badWord of badWords) {
+    if (lowerUsername.includes(badWord.toLowerCase())) {
+      throw new Error(`Username is not allowed. Please be considerate to the children who are playing this game.`);
+    }
+  }
+
   // db store the user
   const db = getDB(); // Assuming getDB returns the database connection pool or connection object
+
+
+  // Check if username already exists
+  const [existing] = await db.execute(
+    `SELECT user_id FROM users WHERE username = ? LIMIT 1;`,
+    [user.username]
+  );
+
+  if (existing.length > 0) {
+    throw new Error(`Username "${user.username}" is already taken`);
+  }
 
   // Hash the password before storing
   const hashed_password = await bcrypt.hash(user.password, 10);  // Hashing with a salt rounds of 10
@@ -78,17 +101,10 @@ async function createUser(user) {
 
 async function readUser(user_id) {
   const db = getDB();
-  const [rows] = await db.query('SELECT * FROM users');
+  let values = [user_id];
+  const [rows] = await db.query('SELECT * FROM users where user = ?', values);
   console.log(rows);
   return rows;
-}
-
-async function updatePlayer(player) {
-
-}
-
-async function deletePlayer(player_id) {
-
 }
 
 async function passiveLoginUser(body) {
@@ -96,6 +112,7 @@ async function passiveLoginUser(body) {
   const db = getDB(); // Assuming getDB returns the database connection pool or connection object
   const user_id = body.user_id;
   const access_token = body.access_token;
+
   let user = {};
   let user_stats = {};
 
@@ -243,6 +260,7 @@ function prepareUpdatePlayerStatsStatement(updated_player_stats) {
   const fields = keys.map(key => `${key} = ?`).join(', ');
   const values = keys.map(key => updated_player_stats[key].value);
 
+  let update_variables = {};
   update_variables.fields = fields;
   update_variables.values = values;
 
@@ -271,7 +289,7 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
 
   // outcome
   if (match_stats.matchOutcome == -1) {updated_player_stats.mp_num_matches_lost_alltime.value += 1}
-  else if (match_stats.matchOutcome == 0) {updated_player_stats.mp_num_matches_drawed_alltime.value += 1}
+  else if (match_stats.matchOutcome === 0) {updated_player_stats.mp_num_matches_drawed_alltime.value += 1}
   else if (match_stats.matchOutcome == 1) {updated_player_stats.mp_num_matches_won_alltime.value += 1}
 
   // hits
@@ -316,7 +334,7 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
     updated_player_stats.mp_most_jumps_in_a_match.new_record = 1;
   }
 
-  updated_player_stats.mp_num_jumps_alltime += match_stats.numJumps;
+  updated_player_stats.mp_num_jumps_alltime.value += match_stats.numJumps;
 
   return updated_player_stats;
 
@@ -358,12 +376,14 @@ async function postMatchPlayerStatsUpdate(body) {
   //   WIN = 1
   // }
 
+  let response = [];
 
   const db = getDB(); 
 
   // for each player
     // calculate and update their all time stats
-
+  for (const player of body) {
+    
     const user_id = player.user_id;
     let match_stats = player.stats;
 
@@ -374,25 +394,23 @@ async function postMatchPlayerStatsUpdate(body) {
       let [resp] = await db.execute(query, [user_id]);
       player_stats = resp[0];
 
-      // remove all single player_stats
-      for (const key in player_stats) {
-        if (key.startsWith('sp_')) {
-          delete player_stats[key];
-        }
-      }
+      if (!player_stats) {
 
-      if (!user) {
-
-        throw new Error('No matching user found.');
+        throw new Error('No matching user stats found.');
 
       }
       else {
 
-        // create update_statement
-        // TODO:
+        // remove all single player stats and the user_id
+        for (const key in player_stats) {
+          if (key.startsWith('sp_') || key == "user_id") {
+            delete player_stats[key];
+          }
+        }
 
+        // create update statement
         let updated_player_stats = findUpdatedPlayerStats(match_stats, player_stats);
-        update_variables = prepareUpdatePlayerStatsStatement(updated_player_stats);
+        let update_variables = prepareUpdatePlayerStatsStatement(updated_player_stats);
 
         try {
 
@@ -406,7 +424,7 @@ async function postMatchPlayerStatsUpdate(body) {
 
           const [result] = await db.execute(queryUpdate, update_variables.values);
 
-          return result;
+          response.push({"user_id": user_id, "stats": updated_player_stats});
 
         } catch (error) {
 
@@ -420,37 +438,18 @@ async function postMatchPlayerStatsUpdate(body) {
         console.error('Error finding player from user_id when updating player stats after match:', error.message);
         throw error;
     }
-}
 
-async function readPlayersAlltimeStats() {
+  }
 
-}
-
-async function readLeaderboardMultiplayerGames() {
-  // return players count #1 placements
-  const db = getDB();
+  return response;
 
 }
 
 // // // // // // // // // // // // // storage response api // // // // // // // // // // // // //
 
-// // // Player // // //
-// player_id | Unique Int
-// device_id | String
-// name | String
-// ship_sprite | Int
-// available_sprites | Array of Ints
-// points | Int
-// unlocked_levels | Int
-// email | String
-// password | String
-// created_date | Date
-/////// to add
-// last_login | Date
-// push_notification?
-// all time stats?
-
 function registerStorageRoutes(app) {
+
+  //// login ////
 
   app.post('/create_user', async function (req, res) {
     console.log("create_user endpoint hit:", req.body);
@@ -494,7 +493,6 @@ function registerStorageRoutes(app) {
 
   });
 
-
   app.post('/passive_login_user', async function (req, res) {
 
     console.log("passive_login_user endpoint hit:", req.body);
@@ -517,83 +515,48 @@ function registerStorageRoutes(app) {
 
   });
 
-  app.get('/update_player', function (req, res) {
+  app.post('/app_version_compatibility', async function (req, res) {
 
-    let response = [];
-    response["success"] = updatePlayer(req);
+    const app_versions = await fs.readFile("./app_versions.json", "utf-8");
 
-    // send the response
-    res.status(200).send(JSON.stringify(response));
+    res.status(200).json({
+      success: true,
+      message: "",
+      data: app_versions
+    });
 
-  });
+  })
 
-  app.get('/delete_player', function (req, res) {
+  //// login ////
 
-    let response = [];
-    response["success"] = deletePlayer(req);
+  //// stats ////
 
-    // send the response
-    res.status(200).send(JSON.stringify(response));
+  app.post('/post_match_player_stats_update', async function (req, res) {
 
-  });
+    console.log("post_match_player_stats_update endpoint hit:", req.body);
 
-  // // // Multiplayer Game // // //
-  // game_id | Int 
-  // player_id | Int
-  // times_hit | Int
-  // asteroids_hit | Int
-  // missed_shots | Int
-  // successful_shots | Int
-  // placement | Int
-  // participants | Array of player_ids
-  // date | Date
-  //////////////// to do
-  // change game_id to not unique
-
-  app.get('/post_match_player_stats_update', function (req, res) {
-
-    let response = [];
-    response["success"] = postMatchPlayerStatsUpdate(req);
-
-    // send the response
-    res.status(200).send(JSON.stringify(response));
+    try {
+      let response = await postMatchPlayerStatsUpdate(req.body);
+      res.status(200).json({
+        success: true,
+        message: "Updated players' stats successfully",
+        data: response
+      });
+    } catch (error) {
+      console.error("Update players' stats failed:", error.message);
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
 
   });
 
 
-  ///////////////////////////// specialty endpoints ///////////////////////////
 
-  app.get('/read_players_alltime_stats', function (req, res) {
-
-    let response = [];
-    response["success"] = readPlayersAlltimeStats(req);
-
-    // send the response
-    res.status(200).send(JSON.stringify(response));
-
-  });
-
-  app.get('/read_leaderboard', function (req, res) {
-
-    let response = [];
-    response["success"] = readLeaderboardMultiplayerGames(req);
-
-    // send the response
-    res.status(200).send(JSON.stringify(response));
-
-  });
+  //// stats ////
 
 } // registerStorageRoutes
-
-  // // // Single Player Game // // //
-  // level_id | Int 
-  // user_id | Int
-  // asteroids_hit | Int
-  // missed_shots | Int
-  // successful_shots | Int
-  // date | Date
-  //////////////// to do
-  // change game_id to not unique
 
 module.exports = {
   createUser,
