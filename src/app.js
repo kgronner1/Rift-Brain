@@ -22,8 +22,7 @@ var express = require('express');
 var app = express();
 app.use(express.json());
 
-// const { exec } = require('child_process');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 
 const util = require('util');
 //const execPromisified = util.promisify(exec);
@@ -55,115 +54,114 @@ startServer();
 
 // // // // // // // // // // // // // network functions // // // // // // // // // // // // //
 
-async function runCommand(command, args = [], cwd = '/home/ec2-user/') {
+async function runCommand(command, args = []) {
   return new Promise((resolve, reject) => {
-      console.log(command, args);
-      const child = spawn(command, args, { stdio: 'inherit', cwd, shell:true });
+    // if this is a binary (not a shell command like "kill ...")
+    const isBinary = !command.startsWith("kill ") && !command.includes(" ");
 
-      child.on('spawn', () => {
-          console.log("RESOLVE runCommand");
-          resolve();
+    if (isBinary) {
+      // start detached background process
+      const child = spawn(command, args, {
+        detached: true,
+        stdio: "ignore",
       });
 
-      child.on('error', (err) => {
-          console.error(`Error spawning process: ${err.message}`);
-          reject(err);
+      if (!child.pid) {
+        reject(new Error("Failed to spawn process"));
+        return;
+      }
+
+      console.log(`Spawned process PID: ${child.pid}`);
+      child.unref(); // allow parent to exit independently
+
+      resolve(child.pid);
+    } else {
+      // run shell command (like "kill 1234")
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          console.error("Command failed:", error.message);
+          reject(error);
+          return;
+        }
+        if (stderr) console.warn("Command stderr:", stderr);
+        resolve(stdout.trim());
       });
+    }
   });
 }
 
 
-// kill the process and the health check timer for a game_instance
-async function endGameInstance(game_instance) {
 
-  // run the script to end the game instance
+async function endGameInstance(game_port) {
   console.log("BEFORE ENDGAME");
 
-  // run this script for the next port that doesn't have a game
-  let command = "kill $(lsof -t -i:" + game_instance + ")";
-
-  console.log("runEndCommand: ", command);
-  // await completion
-  await runCommand(command);
-
-  console.log("AFTER runCommand");
-
-  // before deleting the game object, clear the time out
-  if (game_instances[game_instance]) {
-    if (game_instances[game_instance].timer) {
-      clearTimeout(game_instances[game_instance].timer);
-      console.log("called to remove timer from endGameInstance:", game_instance);
-    }
+  const pid = game_instances[game_port]?.pid;
+  if (!pid) {
+    console.warn("No PID found for game port", game_port);
+    return;
   }
 
-  // remove the game instance from game_instances from the object
-  delete game_instances[game_instance];
+  const command = `kill ${pid}`;
+  console.log("runEndCommand:", command);
 
-  return;
+  try {
+    await runCommand(command);
+    console.log(`Game instance ${game_port} (PID ${pid}) killed successfully.`);
+  } catch (err) {
+    console.error("Error killing process:", err.message);
+  }
+
+  // clear any timers
+  if (game_instances[game_port]?.timer) {
+    clearTimeout(game_instances[game_port].timer);
+    console.log("Removed timer for", game_port);
+  }
+
+  delete game_instances[game_port];
 }
+
 
 
 // this will create a new game instance and store them into the game_instances object
 // returns the new game instance port or 1 for wait
 async function createGameInstance(private_code = "") {
-  // the default return is a wait code of 1
   let new_game_instance_port = 1;
 
-  // find the next port from possible PORTS list that does not already have a game instance
-  let unused_ports = PORTS.filter((a) => !game_instances.hasOwnProperty(a));
+  const unused_ports = PORTS.filter((a) => !game_instances.hasOwnProperty(a));
 
-  if (unused_ports.length > 0) {
-      new_game_instance_port = unused_ports[0];
+  if (unused_ports.length === 0) return 1;
 
-      console.log("BEFORE CREATE GAME");
-      // run this script for the next port that doesn't have a game
-      let command = "/home/ec2-user/rift_jumper_multiplayer_server_test.x86_64";
+  new_game_instance_port = unused_ports[0];
+  const command = "/home/ec2-user/rift_jumper_multiplayer_server_test.x86_64";
+  const options = [`--port=${new_game_instance_port}`];
+  if (private_code) options.push(`--private_code=${private_code}`);
 
-      let options = []
-      options.push(`--port=${new_game_instance_port}`);
-      if (private_code) {
-        options.push(` --private_code=${private_code}`);
-        console.log("runcom options:", options);
-      }
+  console.log("Launching game:", command, options);
 
-      await runCommand(command, options);
-  } else {
-      return 1;
-  }
+  // 🧩 get the PID directly
+  const pid = await runCommand(command, options);
 
-  // game_instance object:
-  // game_instance[PORTNUM] = {"players":0,"active":false, "healthy":false, "private":false, "private_code":0}
-  // players: how many
-  // active: the game is mid-session and players are playing
-  // healthy: this server is alive and well
-  // private: need a game code to join
-  // private_code: host lobbies have a password
-
-  // Initialize the game instance object
+  // Create instance record
   game_instances[new_game_instance_port] = {
-      players: 0,
-      active: false,
-      healthy: false,
-      private: false,
-      private_code: "0",
-      timer: null,
+    players: 0,
+    active: false,
+    healthy: false,
+    private: !!private_code,
+    private_code: private_code || "0",
+    timer: null,
+    pid, // 💾 store the PID
   };
 
-  console.log("game_instances", game_instances);
+  console.log(`Game instance created on port ${new_game_instance_port} (pid ${pid})`);
 
-  // Watch the "healthy" property
-  return watchProperty(game_instances[new_game_instance_port], "healthy", 5000, false).then((healthyValue) => {
-      
-      // begin the health timer
+  return watchProperty(game_instances[new_game_instance_port], "healthy", 5000, false)
+    .then((healthyValue) => {
       startHealthCheckTimer(new_game_instance_port);
-
       console.log("Healthy value:", healthyValue);
-      console.log("new_game_instance_port:", new_game_instance_port);
-
-      // Conditionally return based on healthyValue
       return healthyValue ? new_game_instance_port : 1;
-  });
+    });
 }
+
 
 // watch a specific property and if it changes before the timeout, return the new value
 function watchProperty(obj, property, timeout, defaultValue) {
@@ -387,6 +385,10 @@ app.get('/health_check', function (req, res) {
     console.log("FAILED TO PASS GAME INSTANCE");
   }
 
+});
+
+app.get('/server_health_check', function (req, res) {
+  res.json(true);
 });
 
 
