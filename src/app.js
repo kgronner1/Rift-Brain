@@ -4,13 +4,7 @@
 
 // make more functions and routes that make sense
 
-// login process
-
 // send emails / forgot password
-
-// track usage
-
-// listen for crash
 
 ////// TO DO ///////
 
@@ -19,8 +13,30 @@ const storage = require('./storage');
 //const networking = require('./networking');
 
 var express = require('express');
+const morgan = require('morgan');
+const fs = require('fs');
+const path = require('path');
 var app = express();
 app.use(express.json());
+// Keep request logging minimal and low overhead.
+app.use(morgan('tiny'));
+
+// Ensure fatal errors have a dedicated log file outside stdout/stderr.
+const fatalLogDir = path.join(__dirname, '..', 'logs');
+const fatalLogPath = path.join(fatalLogDir, 'fatal.log');
+fs.mkdirSync(fatalLogDir, { recursive: true });
+
+// Central helper to persist fatal errors with context and stack traces.
+function logFatalError(err, context) {
+  const timestamp = new Date().toISOString();
+  const details = err && err.stack ? err.stack : String(err);
+  const line = `[${timestamp}] ${context}\n${details}\n`;
+  fs.appendFile(fatalLogPath, line, (writeErr) => {
+    if (writeErr) {
+      console.error('Failed to write fatal log:', writeErr);
+    }
+  });
+}
 
 const { spawn, exec } = require('child_process');
 
@@ -51,6 +67,15 @@ async function startServer() {
 }
 
 startServer();
+
+// Capture process-level failures so they are recorded as fatal.
+process.on('uncaughtException', (err) => {
+  logFatalError(err, 'uncaughtException');
+});
+
+process.on('unhandledRejection', (err) => {
+  logFatalError(err, 'unhandledRejection');
+});
 
 // // // // // // // // // // // // // network functions // // // // // // // // // // // // //
 
@@ -264,6 +289,11 @@ app.get('/', function (req, res) {
   res.status(200).send(JSON.stringify(x));
 });
 
+// // Crash test endpoint to validate fatal logging behavior.
+// app.get('/crash-test', function (req, res) {
+//   throw new Error('Crash test requested');
+// });
+
 app.get('/join', async function (req, res) {
 
   // might pass link?player_submitted_private_code=01234
@@ -458,4 +488,10 @@ app.get('/game_instance_ready', function (req, res) {
   passed_game_instance = Number(passed_game_instance);
   game_instances[passed_game_instance]["healthy"] = true;
 
+});
+
+// Treat unexpected route errors as fatal and return a safe 500 response.
+app.use(function (err, req, res, next) {
+  logFatalError(err, `express ${req.method} ${req.originalUrl}`);
+  res.status(500).json({ error: 'Internal server error' });
 });

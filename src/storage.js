@@ -4,6 +4,48 @@ const bcrypt = require('bcryptjs');  // Import bcrypt for password hashing
 const fs = require('fs').promises;
 const path = require('path');
 
+const USER_STATS_FIELDS = new Set([
+  'user_id',
+  'currency_amount',
+  'currency_earned_alltime',
+  'sp_most_currency_earned_in_a_run',
+  'sp_currency_earned_alltime',
+  'sp_highest_combo_alltime',
+  'sp_most_jumps_in_a_run',
+  'sp_num_jumps_alltime',
+  'sp_most_unique_planets_visited_in_a_run',
+  'sp_num_unique_planets_visited_alltime',
+  'sp_most_levels_completed_in_a_run',
+  'sp_num_levels_completed_alltime',
+  'sp_most_asteroids_hit_in_a_run',
+  'sp_num_asteroids_hit_alltime',
+  'sp_longest_run_sec_alltime',
+  'sp_total_time_spent_in_a_run_sec_alltime',
+  'mp_num_matches_won_alltime',
+  'mp_num_matches_drawed_alltime',
+  'mp_num_matches_lost_alltime',
+  'mp_most_currency_earned_in_a_match',
+  'mp_currency_earned_alltime',
+  'mp_num_hits_dealt_alltime',
+  'mp_num_hits_received_alltime',
+  'mp_num_misses_dealt_alltime',
+  'mp_highest_accuracy_in_a_match',
+  'mp_num_kills_alltime',
+  'mp_num_deaths_by_other_players_alltime',
+  'mp_num_deaths_alltime',
+  'mp_most_kills_in_a_match',
+  'mp_longest_time_spent_alive_in_a_match_sec',
+  'mp_total_time_spent_in_a_match_sec_alltime',
+  'mp_most_jumps_in_a_match',
+  'mp_num_jumps_alltime',
+]);
+
+function requireUserStatsField(field) {
+  // Whitelist columns to keep dynamic SQL safe.
+  if (!USER_STATS_FIELDS.has(field)) throw new Error('Invalid user_stats field');
+  return field;
+}
+
 // // // // // // // // USER STORAGE FUNCTIONS // // // // // // // //
 
 async function createAccessToken() {
@@ -566,6 +608,41 @@ function registerStorageRoutes(app) {
         success: false,
         message: error.message
       });
+    }
+
+  });
+
+  app.post('/leaderboard_top_25', async function (req, res) {
+
+    try {
+      const field = requireUserStatsField(req.body.field);
+      const db = getDB();
+      const [rows] = await db.execute(
+        `SELECT user_id, ${field} AS score FROM user_stats ORDER BY ${field} DESC LIMIT 25;`
+      );
+      res.status(200).json({ success: true, message: "", data: rows });
+    } catch (error) {
+      console.error("Leaderboard fetch failed:", error.message);
+      res.status(400).json({ success: false, message: error.message });
+    }
+
+  });
+
+  app.post('/user_stat_score', async function (req, res) {
+
+    try {
+      const field = requireUserStatsField(req.body.field);
+      const user_id = Number(req.body.user_id);
+      if (!Number.isInteger(user_id)) throw new Error('Invalid user_id');
+      const db = getDB();
+      const [rows] = await db.execute(
+        `SELECT user_id, ${field} AS score FROM user_stats WHERE user_id = ? LIMIT 1;`,
+        [user_id]
+      );
+      res.status(200).json({ success: true, message: "", data: rows[0] || null });
+    } catch (error) {
+      console.error("User stat fetch failed:", error.message);
+      res.status(400).json({ success: false, message: error.message });
     }
 
   });
