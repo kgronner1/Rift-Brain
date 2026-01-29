@@ -4,45 +4,66 @@ const bcrypt = require('bcryptjs');  // Import bcrypt for password hashing
 const fs = require('fs').promises;
 const path = require('path');
 
-const USER_STATS_FIELDS = new Set([
-  'user_id',
-  'currency_amount',
-  'currency_earned_alltime',
-  'sp_most_currency_earned_in_a_run',
-  'sp_currency_earned_alltime',
-  'sp_highest_combo_alltime',
-  'sp_most_jumps_in_a_run',
-  'sp_num_jumps_alltime',
-  'sp_most_unique_planets_visited_in_a_run',
-  'sp_num_unique_planets_visited_alltime',
-  'sp_most_levels_completed_in_a_run',
-  'sp_num_levels_completed_alltime',
-  'sp_most_asteroids_hit_in_a_run',
-  'sp_num_asteroids_hit_alltime',
-  'sp_longest_run_sec_alltime',
-  'sp_total_time_spent_in_a_run_sec_alltime',
-  'mp_num_matches_won_alltime',
-  'mp_num_matches_drawed_alltime',
-  'mp_num_matches_lost_alltime',
-  'mp_most_currency_earned_in_a_match',
-  'mp_currency_earned_alltime',
-  'mp_num_hits_dealt_alltime',
-  'mp_num_hits_received_alltime',
-  'mp_num_misses_dealt_alltime',
-  'mp_highest_accuracy_in_a_match',
-  'mp_num_kills_alltime',
-  'mp_num_deaths_by_other_players_alltime',
-  'mp_num_deaths_alltime',
-  'mp_most_kills_in_a_match',
-  'mp_longest_time_spent_alive_in_a_match_sec',
-  'mp_total_time_spent_in_a_match_sec_alltime',
-  'mp_most_jumps_in_a_match',
-  'mp_num_jumps_alltime',
-]);
+let userStatsColumnsCache = null;
 
-function requireUserStatsField(field) {
-  // Whitelist columns to keep dynamic SQL safe.
-  if (!USER_STATS_FIELDS.has(field)) throw new Error('Invalid user_stats field');
+async function loadUserStatsColumns() {
+  if (userStatsColumnsCache) return userStatsColumnsCache;
+  const db = getDB();
+  const [rows] = await db.execute(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_stats'
+     ORDER BY ORDINAL_POSITION;`
+  );
+  const list = rows.map((row) => row.COLUMN_NAME);
+  userStatsColumnsCache = { list, set: new Set(list) };
+  return userStatsColumnsCache;
+}
+
+async function getUserStatsColumns() {
+  const { list } = await loadUserStatsColumns();
+  return list;
+}
+
+function formatUserStatsColumnName(column) {
+  if (column === 'user_id') return 'User ID';
+
+  let suffix = '';
+  let base = column;
+  if (base.startsWith('sp_')) {
+    suffix = ' (Single Player)';
+    base = base.slice(3);
+  } else if (base.startsWith('mp_')) {
+    suffix = ' (Multiplayer)';
+    base = base.slice(3);
+  }
+
+  const replacements = {
+    num: 'Number',
+    sec: 'Seconds',
+    alltime: 'All Time',
+  };
+  const lowerWords = new Set(['in', 'a', 'of', 'by', 'the', 'to', 'and', 'per']);
+
+  const words = base.split('_').map((token) => {
+    const lower = token.toLowerCase();
+    if (replacements[lower]) return replacements[lower];
+    if (lowerWords.has(lower)) return lower;
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  });
+
+  let label = words.join(' ');
+  if (label.startsWith('Number ')) {
+    label = label.replace(/^Number /, 'Number of ');
+  }
+
+  return `${label}${suffix}`;
+}
+
+async function requireUserStatsField(field) {
+  if (!field) throw new Error('Invalid user_stats field');
+  const { set } = await loadUserStatsColumns();
+  if (!set.has(field)) throw new Error('Invalid user_stats field');
   return field;
 }
 
@@ -612,15 +633,55 @@ function registerStorageRoutes(app) {
 
   });
 
-  app.post('/leaderboard_top_25', async function (req, res) {
+  app.post('/user_stats_columns', async function (req, res) {
 
     try {
-      const field = requireUserStatsField(req.body.field);
+      const columns = await getUserStatsColumns();
+      const labels = {};
+      for (const column of columns) {
+        labels[column] = formatUserStatsColumnName(column);
+      }
+      res.status(200).json({ success: true, message: "", data: columns, labels });
+    } catch (error) {
+      console.error("User stats columns fetch failed:", error.message);
+      res.status(400).json({ success: false, message: error.message });
+    }
+
+  });
+
+  app.post('/leaderboard_top_list', async function (req, res) {
+
+    try {
+      const field = await requireUserStatsField(req.body.field);
+      let limit = Number(req.body.limit);
+      if (!limit) {
+        limit = 25;
+      }
+      let user_id = null;
+      if (req.body.user_id !== undefined && req.body.user_id !== null && req.body.user_id !== '') {
+        user_id = Number(req.body.user_id);
+        if (!Number.isInteger(user_id)) throw new Error('Invalid user_id');
+      }
       const db = getDB();
       const [rows] = await db.execute(
-        `SELECT user_id, ${field} AS score FROM user_stats ORDER BY ${field} DESC LIMIT 25;`
+        `SELECT us.user_id, u.username, us.${field} AS score
+         FROM user_stats us
+         JOIN users u ON u.user_id = us.user_id
+         ORDER BY us.${field} DESC
+         LIMIT ?;`, [limit]
       );
-      res.status(200).json({ success: true, message: "", data: rows });
+      let user = null;
+      if (user_id !== null) {
+        const [userRows] = await db.execute(
+          `SELECT us.user_id, u.username, us.${field} AS score
+           FROM user_stats us
+           JOIN users u ON u.user_id = us.user_id
+           WHERE us.user_id = ?
+           LIMIT 1;`, [user_id]
+        );
+        user = userRows[0] || null;
+      }
+      res.status(200).json({ success: true, message: "", data: { list: rows, user } });
     } catch (error) {
       console.error("Leaderboard fetch failed:", error.message);
       res.status(400).json({ success: false, message: error.message });
@@ -628,10 +689,10 @@ function registerStorageRoutes(app) {
 
   });
 
-  app.post('/user_stat_score', async function (req, res) {
+  app.post('/user_single_stat', async function (req, res) {
 
     try {
-      const field = requireUserStatsField(req.body.field);
+      const field = await requireUserStatsField(req.body.field);
       const user_id = Number(req.body.user_id);
       if (!Number.isInteger(user_id)) throw new Error('Invalid user_id');
       const db = getDB();
@@ -641,13 +702,29 @@ function registerStorageRoutes(app) {
       );
       res.status(200).json({ success: true, message: "", data: rows[0] || null });
     } catch (error) {
-      console.error("User stat fetch failed:", error.message);
+      console.error("User single stat fetch failed:", error.message);
       res.status(400).json({ success: false, message: error.message });
     }
 
   });
 
+  app.post('/user_all_stats', async function (req, res) {
 
+    try {
+      const user_id = Number(req.body.user_id);
+      if (!Number.isInteger(user_id)) throw new Error('Invalid user_id');
+      const db = getDB();
+      const [rows] = await db.execute(
+        `SELECT * FROM user_stats WHERE user_id = ? LIMIT 1;`,
+        [user_id]
+      );
+      res.status(200).json({ success: true, message: "", data: rows[0] || null });
+    } catch (error) {
+      console.error("User all stats fetch failed:", error.message);
+      res.status(400).json({ success: false, message: error.message });
+    }
+
+  });
 
   //// stats ////
 
