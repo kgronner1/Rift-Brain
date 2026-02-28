@@ -344,7 +344,7 @@ app.get('/join', async function (req, res) {
     // find all healthy games
     // avaiable = not started game, not private game, less than 4 players
     let healthy_games = Object.entries(game_instances).reduce( (i, [key, g]) => {
-      if (g.healthy && !g.private && g.players < MAX_PLAYERS) {
+      if (g.healthy && !g.active && !g.private && g.players < MAX_PLAYERS) {
         i[key] = g;
       }
       return i;
