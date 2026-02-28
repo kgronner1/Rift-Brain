@@ -96,10 +96,15 @@ async function createUser(user) {
   const badWordsData = await fs.readFile(filePath, 'utf-8');
   const badWords = JSON.parse(badWordsData).bad_words;
 
-  // Check if username contains any bad word (case-insensitive)
+  // Check if username contains any bad word as a standalone token (case-insensitive).
+  // This avoids false positives like "Stitch" matching "tit".
   const lowerUsername = user.username.toLowerCase();
   for (const badWord of badWords) {
-    if (lowerUsername.includes(badWord.toLowerCase())) {
+    const normalizedBadWord = badWord.toLowerCase().trim();
+    const escapedBadWord = normalizedBadWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const standaloneWordPattern = new RegExp(`(?:^|[^a-z0-9])${escapedBadWord}(?:$|[^a-z0-9])`, 'i');
+
+    if (standaloneWordPattern.test(lowerUsername)) {
       throw new Error(`Username is not allowed. Please be considerate to the children who are playing this game.`);
     }
   }
@@ -170,7 +175,7 @@ async function createUser(user) {
     const [user_stats_result] = await db.execute(user_stats_query, user_stats_values);
 
     // Return the user_id (assuming auto-increment)
-    return {"user_id":result.insertId, "access_token": access_token}; // The ID of the newly created user
+    return {"user":user, "user_id":result.insertId, "access_token": access_token}; // The ID of the newly created user
   } catch (error) {
     // Handle any errors
     console.error('Error creating user:', error);
@@ -317,7 +322,9 @@ async function loginUser(body) {
         console.log("Failed to update last login date.", error)
       }
 
-      return {"user_id":user.user_id, "access_token":user.access_token}; // Return the player data (or a session token, etc.)
+      user.password = '';
+
+      return {"user": user, "user_id":user.user_id, "access_token":user.access_token}; // Return the player data (or a session token, etc.)
     } else {
       // If the password doesn't match
       throw new Error('Invalid password');
@@ -583,7 +590,7 @@ function registerStorageRoutes(app) {
       res.status(200).json({
         success: true,
         message: "Passive user logged in successfully",
-        data: result
+        data: {"result": result}
       });
     } catch (error) {
       console.error("Pasive user login failed:", error.message);
@@ -670,10 +677,27 @@ function registerStorageRoutes(app) {
          ORDER BY us.${field} DESC
          LIMIT ?;`, [limit]
       );
+      let lastScore = null;
+      let lastRank = 0;
+      const list = rows.map((row, index) => {
+        const position = index + 1;
+        if (lastScore === null || row.score !== lastScore) {
+          lastRank = position;
+          lastScore = row.score;
+        }
+        return {
+          ...row,
+          position,
+          rank: lastRank
+        };
+      });
       let user = null;
       if (user_id !== null) {
         const [userRows] = await db.execute(
-          `SELECT us.user_id, u.username, us.${field} AS score
+          `SELECT us.user_id, u.username, us.${field} AS score,
+                  (SELECT COUNT(*) + 1
+                   FROM user_stats us2
+                   WHERE us2.${field} > us.${field}) AS rank
            FROM user_stats us
            JOIN users u ON u.user_id = us.user_id
            WHERE us.user_id = ?
@@ -681,7 +705,7 @@ function registerStorageRoutes(app) {
         );
         user = userRows[0] || null;
       }
-      res.status(200).json({ success: true, message: "", data: { list: rows, user } });
+      res.status(200).json({ success: true, message: "", data: { list, user } });
     } catch (error) {
       console.error("Leaderboard fetch failed:", error.message);
       res.status(400).json({ success: false, message: error.message });
