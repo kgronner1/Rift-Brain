@@ -576,39 +576,65 @@ async function postMatchPlayerStatsUpdate(body) {
 
 async function singlePlayerStatsSync(body) {
 
-  // this function should check if the updated_date in the body is more recent than the user's stats saved in the database
+  // this function checks if the updated_date in the body is more recent than the user's stats saved in the database
   // if the updated_date is more recent, replace the single player stats in the database
-    // query again for the users_stats from the database and return them.
-
   // return the user's stats
 
   if (!body.user_id) {
-    // no user_id cant proceed
-    return false;
+    throw new Error('Missing required field: user_id');
   }
-
-  if (!body.stats._last_updated) {
-     // skip the check
-  }
-
-  let response = [];
 
   const db = getDB();
+  const user_id = body.user_id;
 
-  // SELECT * FROM user_stats WHERE UNIX_TIMESTAMP(_last_updated) < body.stats._last_updated and user_id = body.user_id;
+  // if the client sent a _last_updated timestamp, check if local data is fresher
+  if (body.stats && body.stats._last_updated) {
 
-  // if we have a result that means the local data is fresher, so let's update it
-  if (result) {
+    const [staleRows] = await db.execute(
+      `SELECT user_id FROM user_stats WHERE user_id = ? AND UNIX_TIMESTAMP(_last_updated) < ?;`,
+      [user_id, body.stats._last_updated]
+    );
 
-    // for this user_id
-    // update all sp_ columns 
-    // also update currency amount and currency earned all time
+    // if we have a result that means the local data is fresher, so let's update it
+    if (staleRows.length > 0) {
+
+      // collect all sp_ columns and currency columns from the incoming stats
+      const updateKeys = Object.keys(body.stats).filter(key =>
+        key.startsWith('sp_') || key === 'currency_amount' || key === 'currency_earned_alltime'
+      );
+
+      if (updateKeys.length > 0) {
+
+        const fields = updateKeys.map(key => `${key} = ?`).join(', ');
+        const values = updateKeys.map(key => body.stats[key]);
+
+        const queryUpdate = `
+          UPDATE user_stats
+          SET ${fields}, _last_updated = NOW()
+          WHERE user_id = ?;
+        `;
+
+        values.push(user_id);
+
+        await db.execute(queryUpdate, values);
+
+      }
+
+    }
 
   }
 
-  // SELECT * from user_stats where user_id = body.user_id;
+  // return the user's current stats
+  const [rows] = await db.execute(
+    `SELECT * FROM user_stats WHERE user_id = ?;`,
+    [user_id]
+  );
 
-  return user_stats;
+  if (!rows[0]) {
+    throw new Error('No matching user stats found.');
+  }
+
+  return {"user_id":user_id, "stats": rows[0]};
 
 }
 
