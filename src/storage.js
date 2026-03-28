@@ -634,6 +634,10 @@ async function singlePlayerStatsSync(body) {
     throw new Error('No matching user stats found.');
   }
 
+  if (rows[0]._last_updated) {
+    rows[0]._last_updated = Math.floor(new Date(rows[0]._last_updated).getTime() / 1000);
+  }
+
   return {"user_id":user_id, "stats": rows[0]};
 
 }
