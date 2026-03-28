@@ -437,6 +437,47 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
 
 }
 
+
+// user_stats
+// +--------------------------------------------+---------+------+-----+---------+-------+
+// | Field                                      | Type    | Null | Key | Default | Extra |
+// +--------------------------------------------+---------+------+-----+---------+-------+
+// | user_id                                    | int(11) | NO   | PRI | NULL    |       |
+// | currency_amount                            | int(11) | YES  |     | 0       |       |
+// | currency_earned_alltime                    | int(11) | YES  |     | 0       |       |
+// | sp_most_currency_earned_in_a_run           | int(11) | YES  |     | 0       |       |
+// | sp_currency_earned_alltime                 | int(11) | YES  |     | 0       |       |
+// | sp_highest_combo_alltime                   | int(11) | YES  |     | 0       |       |
+// | sp_most_jumps_in_a_run                     | int(11) | YES  |     | 0       |       |
+// | sp_num_jumps_alltime                       | int(11) | YES  |     | 0       |       |
+// | sp_most_unique_planets_visited_in_a_run    | int(11) | YES  |     | 0       |       |
+// | sp_num_unique_planets_visited_alltime      | int(11) | YES  |     | 0       |       |
+// | sp_most_levels_completed_in_a_run          | int(11) | YES  |     | 0       |       |
+// | sp_num_levels_completed_alltime            | int(11) | YES  |     | 0       |       |
+// | sp_most_asteroids_hit_in_a_run             | int(11) | YES  |     | 0       |       |
+// | sp_num_asteroids_hit_alltime               | int(11) | YES  |     | 0       |       |
+// | sp_longest_run_sec_alltime                 | float   | YES  |     | 0       |       |
+// | sp_total_time_spent_in_a_run_sec_alltime   | float   | YES  |     | 0       |       |
+// | mp_num_matches_won_alltime                 | int(11) | YES  |     | 0       |       |
+// | mp_num_matches_drawed_alltime              | int(11) | YES  |     | 0       |       |
+// | mp_num_matches_lost_alltime                | int(11) | YES  |     | 0       |       |
+// | mp_most_currency_earned_in_a_match         | int(11) | YES  |     | 0       |       |
+// | mp_currency_earned_alltime                 | int(11) | YES  |     | 0       |       |
+// | mp_num_hits_dealt_alltime                  | int(11) | YES  |     | 0       |       |
+// | mp_num_hits_received_alltime               | int(11) | YES  |     | 0       |       |
+// | mp_num_misses_dealt_alltime                | int(11) | YES  |     | 0       |       |
+// | mp_highest_accuracy_in_a_match             | float   | YES  |     | 0       |       |
+// | mp_num_kills_alltime                       | int(11) | YES  |     | 0       |       |
+// | mp_num_deaths_by_other_players_alltime     | int(11) | YES  |     | 0       |       |
+// | mp_num_deaths_alltime                      | int(11) | YES  |     | 0       |       |
+// | mp_most_kills_in_a_match                   | int(11) | YES  |     | 0       |       |
+// | mp_longest_time_spent_alive_in_a_match_sec | float   | YES  |     | 0       |       |
+// | mp_total_time_spent_in_a_match_sec_alltime | float   | YES  |     | 0       |       |
+// | mp_most_jumps_in_a_match                   | int(11) | YES  |     | 0       |       |
+// | mp_num_jumps_alltime                       | int(11) | YES  |     | 0       |       |
+// +--------------------------------------------+---------+------+-----+---------+-------+
+
+
 // updates the players stats after a game
 // multiple plays could be passed
 async function postMatchPlayerStatsUpdate(body) {
@@ -529,6 +570,45 @@ async function postMatchPlayerStatsUpdate(body) {
   }
 
   return response;
+
+}
+
+
+async function singlePlayerStatsSync(body) {
+
+  // this function should check if the updated_date in the body is more recent than the user's stats saved in the database
+  // if the updated_date is more recent, replace the single player stats in the database
+    // query again for the users_stats from the database and return them.
+
+  // return the user's stats
+
+  if (!body.user_id) {
+    // no user_id cant proceed
+    return false;
+  }
+
+  if (!body.stats._last_updated) {
+     // skip the check
+  }
+
+  let response = [];
+
+  const db = getDB();
+
+  // SELECT * FROM user_stats WHERE UNIX_TIMESTAMP(_last_updated) < body.stats._last_updated and user_id = body.user_id;
+
+  // if we have a result that means the local data is fresher, so let's update it
+  if (result) {
+
+    // for this user_id
+    // update all sp_ columns 
+    // also update currency amount and currency earned all time
+
+  }
+
+  // SELECT * from user_stats where user_id = body.user_id;
+
+  return user_stats;
 
 }
 
@@ -632,6 +712,27 @@ function registerStorageRoutes(app) {
       });
     } catch (error) {
       console.error("Update players' stats failed:", error.message);
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+
+  });
+
+  app.post('/single_player_stats_sync', async function (req, res) {
+
+    console.log("single_player_stats_sync endpoint hit:", req.body);
+
+    try {
+      let response = await singlePlayerStatsSync(req.body);
+      res.status(200).json({
+        success: true,
+        message: "Single player stats synced successfully",
+        data: response
+      });
+    } catch (error) {
+      console.error("Single player stats syncs failed:", error.message);
       res.status(400).json({
         success: false,
         message: error.message

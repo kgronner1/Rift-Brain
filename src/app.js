@@ -362,7 +362,7 @@ app.get('/join', async function (req, res) {
     }
 
     // find the first game with more than one player
-    let game = Object.entries(healthy_games).find( g => g.players > 0);
+    let game = Object.entries(healthy_games).find(([, g]) => g.players > 0);
     if (game) {
       game_port = game[0];
     }
