@@ -167,12 +167,20 @@ async function createUser(user) {
     const user_stats_query = `
       INSERT INTO user_stats (user_id) VALUES (?)
     `;
-
     const user_stats_values = [
       result.insertId
     ];
-
     const [user_stats_result] = await db.execute(user_stats_query, user_stats_values);
+
+    // create user_accolades insert
+    const user_accolades_query = `
+      INSERT INTO user_accolades (user_id) VALUES (?)
+    `;
+    const user_accolades_values = [
+      result.insertId
+    ];
+    const [user_accolades_result] = await db.execute(user_accolades_query, user_accolades_values);
+
 
     // Return the user_id (assuming auto-increment)
     return {"user":user, "user_id":result.insertId, "access_token": access_token}; // The ID of the newly created user
@@ -200,6 +208,7 @@ async function passiveLoginUser(body) {
 
   let user = {};
   let user_stats = {};
+  //let user_accolades = {};
 
   try {
 
@@ -219,12 +228,6 @@ async function passiveLoginUser(body) {
 
       try {
 
-        const query = `SELECT * FROM user_stats WHERE user_id = ?`;
-        // Fetch the user from the database
-        let [resp] = await db.execute(query, [user_id]);
-        user_stats = resp[0];
-
-
         const queryUpdate = `
           UPDATE users
           SET last_login = NOW()
@@ -238,7 +241,7 @@ async function passiveLoginUser(body) {
           console.log("Failed to update last login date.", error)
         }
 
-        return {"user":user, "user_stats":user_stats};
+        return {"user":user, "user_id":user_id};
 
       } catch (error) {
 
@@ -325,6 +328,7 @@ async function loginUser(body) {
       user.password = '';
 
       return {"user": user, "user_id":user.user_id, "access_token":user.access_token}; // Return the player data (or a session token, etc.)
+
     } else {
       // If the password doesn't match
       throw new Error('Invalid password');
@@ -437,6 +441,90 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
 
 }
 
+// +---------------------+------------------+------+-----+---------+-------+
+// | user_id             | int(10) unsigned | NO   | PRI | NULL    |       |
+// | Beaming             | int(10) unsigned | YES  |     | 0       |       |
+// | BigAssister         | int(10) unsigned | YES  |     | 0       |       |
+// | Bully               | int(10) unsigned | YES  |     | 0       |       |
+// | CleanUpCrew         | int(10) unsigned | YES  |     | 0       |       |
+// | ColdBlooded         | int(10) unsigned | YES  |     | 0       |       |
+// | Deflector           | int(10) unsigned | YES  |     | 0       |       |
+// | EarlyBird           | int(10) unsigned | YES  |     | 0       |       |
+// | Egalitarian         | int(10) unsigned | YES  |     | 0       |       |
+// | EtTuBrute           | int(10) unsigned | YES  |     | 0       |       |
+// | FreezeFrame         | int(10) unsigned | YES  |     | 0       |       |
+// | Ghost               | int(10) unsigned | YES  |     | 0       |       |
+// | GreenMachine        | int(10) unsigned | YES  |     | 0       |       |
+// | InYourFace          | int(10) unsigned | YES  |     | 0       |       |
+// | IrishGoodbye        | int(10) unsigned | YES  |     | 0       |       |
+// | Jumpy               | int(10) unsigned | YES  |     | 0       |       |
+// | LongShot            | int(10) unsigned | YES  |     | 0       |       |
+// | MachineGun          | int(10) unsigned | YES  |     | 0       |       |
+// | Nemesis             | int(10) unsigned | YES  |     | 0       |       |
+// | OneInchPunch        | int(10) unsigned | YES  |     | 0       |       |
+// | Pacifist            | int(10) unsigned | YES  |     | 0       |       |
+// | Pyromaniac          | int(10) unsigned | YES  |     | 0       |       |
+// | Quigley             | int(10) unsigned | YES  |     | 0       |       |
+// | RiftJumper          | int(10) unsigned | YES  |     | 0       |       |
+// | Sharpshooter        | int(10) unsigned | YES  |     | 0       |       |
+// | Sniper              | int(10) unsigned | YES  |     | 0       |       |
+// | StepInTheArena      | int(10) unsigned | YES  |     | 0       |       |
+// | StopHittingYourself | int(10) unsigned | YES  |     | 0       |       |
+// | StudentDriver       | int(10) unsigned | YES  |     | 0       |       |
+// | TheLateShow         | int(10) unsigned | YES  |     | 0       |       |
+// | TriggerHappy        | int(10) unsigned | YES  |     | 0       |       |
+// | Underdog            | int(10) unsigned | YES  |     | 0       |       |
+// | VarietyShow         | int(10) unsigned | YES  |     | 0       |       |
+// +---------------------+------------------+------+-----+---------+-------+
+
+
+async function getUserAccolades(user_id) {
+
+    const db = getDB();
+
+    const queryColumns = `
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME = 'user_accolades' AND COLUMN_NAME != 'user_id'
+    `;
+    const queryUser = `SELECT * FROM user_accolades WHERE user_id = ?`;
+
+    const [[colRows], [userRows]] = await Promise.all([
+        db.execute(queryColumns),
+        db.execute(queryUser, [user_id])
+    ]);
+
+    const accoladeColumns = colRows.map(row => row.COLUMN_NAME);
+
+    const raritySelects = accoladeColumns
+        .map(col => `ROUND(SUM(${col} > 0) / COUNT(*) * 100, 2) AS ${col}`)
+        .join(', ');
+    const queryRarity = `SELECT ${raritySelects} FROM user_accolades`;
+
+    const [rarityRows] = await db.execute(queryRarity);
+
+    const user_accolades_raw = userRows[0];
+    const rarity = rarityRows[0];
+
+    const user_accolades = {};
+    for (const col of accoladeColumns) {
+        user_accolades[col] = {
+            earned: user_accolades_raw?.[col] ?? 0,
+            rarity: rarity[col]
+        };
+    }
+
+    return user_accolades;
+}
+
+
+
+async function postMatchPlayerAccoladesUpdate() {
+
+  
+
+}
+
+
 
 // user_stats
 // +--------------------------------------------+---------+------+-----+---------+-------+
@@ -476,6 +564,7 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
 // | mp_most_jumps_in_a_match                   | int(11) | YES  |     | 0       |       |
 // | mp_num_jumps_alltime                       | int(11) | YES  |     | 0       |       |
 // +--------------------------------------------+---------+------+-----+---------+-------+
+
 
 
 // updates the players stats after a game
@@ -771,6 +860,27 @@ function registerStorageRoutes(app) {
 
   });
 
+  app.post('/player_accolades_sync', async function (req, res) {
+
+    console.log("play_accolades_sync endpoint hit:", req.body);
+
+    try {
+      let response = await playerAccoladesSync(req.body);
+      res.status(200).json({
+        success: true,
+        message: "Single player stats synced successfully",
+        data: response
+      });
+    } catch (error) {
+      console.error("Single player stats syncs failed:", error.message);
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+
+  });
+
   app.post('/user_stats_columns', async function (req, res) {
 
     try {
@@ -876,6 +986,24 @@ function registerStorageRoutes(app) {
       res.status(200).json({ success: true, message: "", data: rows[0] || null });
     } catch (error) {
       console.error("User all stats fetch failed:", error.message);
+      res.status(400).json({ success: false, message: error.message });
+    }
+
+  });
+
+
+  app.post('/user_all_accolades', async function (req, res) {
+
+    try {
+      const user_id = Number(req.body.user_id);
+      if (!Number.isInteger(user_id)) throw new Error('Invalid user_id');
+
+      let resp = getUserAccolades(user_id);
+      //{"ACCOLADE_KEY": {"rarity":90, "earned":4}, "ACCOLADE_KEY_2": {"rarity":90, "earned":4}}
+
+      res.status(200).json({ success: true, message: "", data: resp || null });
+    } catch (error) {
+      console.error("User all accolades fetch failed:", error.message);
       res.status(400).json({ success: false, message: error.message });
     }
 
