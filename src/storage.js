@@ -182,6 +182,17 @@ async function createUser(user) {
     const [user_accolades_result] = await db.execute(user_accolades_query, user_accolades_values);
 
 
+    // create user_accolades insert
+    const user_accolades_time_earned_query = `
+      INSERT INTO user_accolades_time_earned (user_id) VALUES (?)
+    `;
+    const user_accolades_time_earned_values = [
+      result.insertId
+    ];
+    const [user_accolades_time_earned_result] = await db.execute(user_accolades_time_earned_query, user_accolades_time_earned_values);
+
+
+
     // Return the user_id (assuming auto-increment)
     return {"user":user, "user_id":result.insertId, "access_token": access_token}; // The ID of the newly created user
   } catch (error) {
@@ -484,13 +495,15 @@ async function getUserAccolades(user_id) {
 
     const queryColumns = `
         SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
-        WHERE TABLE_NAME = 'user_accolades' AND COLUMN_NAME != 'user_id'
+        WHERE TABLE_NAME = 'user_accolades' AND COLUMN_NAME != 'user_id' AND COLUMN_NAME != '_last_updated'
     `;
     const queryUser = `SELECT * FROM user_accolades WHERE user_id = ?`;
+    const queryTimeEarned = `SELECT * FROM user_accolades_time_earned WHERE user_id = ?`;
 
-    const [[colRows], [userRows]] = await Promise.all([
+    const [[colRows], [userRows], [timeRows]] = await Promise.all([
         db.execute(queryColumns),
-        db.execute(queryUser, [user_id])
+        db.execute(queryUser, [user_id]),
+        db.execute(queryTimeEarned, [user_id])
     ]);
 
     const accoladeColumns = colRows.map(row => row.COLUMN_NAME);
@@ -504,24 +517,23 @@ async function getUserAccolades(user_id) {
 
     const user_accolades_raw = userRows[0];
     const rarity = rarityRows[0];
+    const user_accolades_time_earned = timeRows[0] ?? {};
 
     const user_accolades = {};
     for (const col of accoladeColumns) {
+        const rawTime = user_accolades_time_earned[col];
         user_accolades[col] = {
             earned: user_accolades_raw?.[col] ?? 0,
-            rarity: rarity[col]
+            rarity: parseFloat(rarity[col]),
+            timeFirstEarned: rawTime ? Math.floor(new Date(rawTime).getTime() / 1000) : null
         };
     }
 
+    // dont need to return update timestamp
+    delete user_accolades.user_id;
+    delete user_accolades._last_updated;
+
     return user_accolades;
-}
-
-
-
-async function postMatchPlayerAccoladesUpdate() {
-
-  
-
 }
 
 
@@ -658,12 +670,104 @@ async function postMatchPlayerStatsUpdate(body) {
 
   }
 
+  // remove user_id and last updated
+  delete response.stats.user_id;
+  delete response.stats._last_updated;
+
   return response;
+
+}
+
+async function playerAccoladesSync(body) {
+
+  // expecting:
+  // {"user_id": user_id, "accolades": {"KEY": VALUE, "KEY2": VALUE...}}
+
+  // this function checks if the updated_date in the body is more recent than the user's stats saved in the database
+  // if the updated_date is more recent, replace the single player stats in the database
+  // return the user's stats
+
+  if (!body.user_id) {
+    throw new Error('Missing required field: user_id');
+  }
+
+  const db = getDB();
+  const user_id = body.user_id;
+
+  // if the client sent a _last_updated timestamp, check if local data is fresher
+  if (body.accolades && body.accolades._last_updated) {
+
+    const [staleRows] = await db.execute(
+      `SELECT user_id FROM user_accolades WHERE user_id = ? AND UNIX_TIMESTAMP(_last_updated) < ?;`,
+      [user_id, body.accolades._last_updated]
+    );
+
+    // if we have a result that means the local data is fresher, so let's update it
+    if (staleRows.length > 0) {
+
+      const updateKeys = Object.keys(body.accolades).filter(key => key !== '_last_updated');
+
+      if (updateKeys.length > 0) { 
+
+        const fields = updateKeys.map(key => `${key} = ?`).join(', ');
+        const values = updateKeys.map(key => body.accolades[key]);
+
+        // For any key newly earning a non-zero value, stamp time_earned if not already set
+        const potentialFirstEarnKeys = updateKeys.filter(key => body.accolades[key] != null && body.accolades[key] > 0);
+
+        if (potentialFirstEarnKeys.length > 0) {
+          const [timeRows] = await db.execute(
+            `SELECT * FROM user_accolades_time_earned WHERE user_id = ?`,
+            [user_id]
+          );
+
+          if (timeRows.length > 0) {
+            const timeRow = timeRows[0];
+            const firstTimeKeys = potentialFirstEarnKeys.filter(key => timeRow[key] === null);
+
+            if (firstTimeKeys.length > 0) {
+              const timeFields = firstTimeKeys.map(key => `${key} = NOW()`).join(', ');
+              await db.execute(
+                `UPDATE user_accolades_time_earned SET ${timeFields} WHERE user_id = ?`,
+                [user_id]
+              );
+            }
+          }
+        }
+
+
+        // update the user_accolades table with the new counts
+        const queryUpdate = `
+          UPDATE user_accolades
+          SET ${fields}, _last_updated = NOW()
+          WHERE user_id = ?;
+        `;
+        values.push(user_id);
+        await db.execute(queryUpdate, values);
+
+
+      }
+
+    }
+
+  }
+
+  // return the user's current stats
+  const resp = await getUserAccolades(user_id);
+
+  if (!resp) {
+    throw new Error('No matching user accolades found.');
+  }
+
+  return {"user_id":user_id, "user_accolades": resp};
 
 }
 
 
 async function singlePlayerStatsSync(body) {
+
+  // expecting:
+  // {"user_id": user_id, "stats": {"KEY": VALUE, "KEY2": VALUE...}}
 
   // this function checks if the updated_date in the body is more recent than the user's stats saved in the database
   // if the updated_date is more recent, replace the single player stats in the database
@@ -723,11 +827,14 @@ async function singlePlayerStatsSync(body) {
     throw new Error('No matching user stats found.');
   }
 
-  if (rows[0]._last_updated) {
-    rows[0]._last_updated = Math.floor(new Date(rows[0]._last_updated).getTime() / 1000);
-  }
+  // dont need to return update timestamp and user_id
+  delete rows[0].user_id;
+  delete rows[0]._last_updated;
+  // if (rows[0]._last_updated) {
+  //   rows[0]._last_updated = Math.floor(new Date(rows[0]._last_updated).getTime() / 1000);
+  // }
 
-  return {"user_id":user_id, "stats": rows[0]};
+  return {"user_id":user_id, "user_stats": rows[0]};
 
 }
 
@@ -868,11 +975,11 @@ function registerStorageRoutes(app) {
       let response = await playerAccoladesSync(req.body);
       res.status(200).json({
         success: true,
-        message: "Single player stats synced successfully",
+        message: "Player accolades synced successfully",
         data: response
       });
     } catch (error) {
-      console.error("Single player stats syncs failed:", error.message);
+      console.error("Player accolades syncs failed:", error.message);
       res.status(400).json({
         success: false,
         message: error.message
@@ -983,6 +1090,10 @@ function registerStorageRoutes(app) {
         `SELECT * FROM user_stats WHERE user_id = ? LIMIT 1;`,
         [user_id]
       );
+
+      // dont need to send this
+      delete rows[0]._last_updated;
+
       res.status(200).json({ success: true, message: "", data: rows[0] || null });
     } catch (error) {
       console.error("User all stats fetch failed:", error.message);
@@ -998,8 +1109,8 @@ function registerStorageRoutes(app) {
       const user_id = Number(req.body.user_id);
       if (!Number.isInteger(user_id)) throw new Error('Invalid user_id');
 
-      let resp = getUserAccolades(user_id);
-      //{"ACCOLADE_KEY": {"rarity":90, "earned":4}, "ACCOLADE_KEY_2": {"rarity":90, "earned":4}}
+      let resp = await getUserAccolades(user_id);
+      // {"ACCOLADE_KEY": {"rarity":90, "earned":4}, "ACCOLADE_KEY_2": {"rarity":90, "earned":4}}
 
       res.status(200).json({ success: true, message: "", data: resp || null });
     } catch (error) {
