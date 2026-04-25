@@ -508,15 +508,15 @@ async function getUserAccolades(user_id) {
 
     const accoladeColumns = colRows.map(row => row.COLUMN_NAME);
 
-    const raritySelects = accoladeColumns
+    const earnRateSelects = accoladeColumns
         .map(col => `ROUND(SUM(${col} > 0) / COUNT(*) * 100, 2) AS ${col}`)
         .join(', ');
-    const queryRarity = `SELECT ${raritySelects} FROM user_accolades`;
+    const queryEarnRate = `SELECT ${earnRateSelects} FROM user_accolades`;
 
-    const [rarityRows] = await db.execute(queryRarity);
+    const [earnRateRows] = await db.execute(queryEarnRate);
 
     const user_accolades_raw = userRows[0];
-    const rarity = rarityRows[0];
+    const earnRate = earnRateRows[0];
     const user_accolades_time_earned = timeRows[0] ?? {};
 
     const user_accolades = {};
@@ -524,7 +524,7 @@ async function getUserAccolades(user_id) {
         const rawTime = user_accolades_time_earned[col];
         user_accolades[col] = {
             earned: user_accolades_raw?.[col] ?? 0,
-            rarity: parseFloat(rarity[col]),
+            earnRate: parseFloat(earnRate[col]),
             timeFirstEarned: rawTime ? Math.floor(new Date(rawTime).getTime() / 1000) : null
         };
     }
@@ -653,6 +653,10 @@ async function postMatchPlayerStatsUpdate(body) {
 
           const [result] = await db.execute(queryUpdate, update_variables.values);
 
+          // remove user id and last updated from stats object
+          delete updated_player_stats.user_id;
+          delete updated_player_stats._last_updated;
+
           response.push({"user_id": user_id, "stats": updated_player_stats});
 
         } catch (error) {
@@ -669,10 +673,6 @@ async function postMatchPlayerStatsUpdate(body) {
     }
 
   }
-
-  // remove user_id and last updated
-  delete response.stats.user_id;
-  delete response.stats._last_updated;
 
   return response;
 
@@ -1110,7 +1110,7 @@ function registerStorageRoutes(app) {
       if (!Number.isInteger(user_id)) throw new Error('Invalid user_id');
 
       let resp = await getUserAccolades(user_id);
-      // {"ACCOLADE_KEY": {"rarity":90, "earned":4}, "ACCOLADE_KEY_2": {"rarity":90, "earned":4}}
+      // {"ACCOLADE_KEY": {"earnRate":90, "earned":4}, "ACCOLADE_KEY_2": {"earnRate":90, "earned":4}}
 
       res.status(200).json({ success: true, message: "", data: resp || null });
     } catch (error) {
