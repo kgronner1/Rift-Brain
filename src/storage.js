@@ -438,6 +438,9 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
 
   updated_player_stats.mp_num_jumps_alltime.value += match_stats.numJumps;
 
+  // unique planets visited
+  updated_player_stats.sp_num_unique_planets_visited_alltime.value += match_stats.numUniquePlanetsVisited;
+
   return updated_player_stats;
 
   // updated_player_stats
