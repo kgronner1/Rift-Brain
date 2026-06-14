@@ -403,10 +403,6 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
   const match_accuracy = match_stats.numHits / (match_stats.numMisses + match_stats.numHits);
   const alltime_accuracy = updated_player_stats.mp_num_hits_dealt_alltime / Math.max(updated_player_stats.mp_num_hits_dealt_alltime + updated_player_stats.mp_num_misses_dealt_alltime, 1);
   updated_player_stats.mp_average_accuracy.value = alltime_accuracy;
-  // if (updated_player_stats.mp_highest_accuracy_in_a_match.value < match_accuracy) {
-  //   updated_player_stats.mp_highest_accuracy_in_a_match.value = match_accuracy;
-  //   updated_player_stats.mp_highest_accuracy_in_a_match.new_record = 1;
-  // }
 
   // kills
   updated_player_stats.mp_num_kills_alltime.value += match_stats.numKills;
@@ -574,7 +570,7 @@ async function getUserAccolades(user_id) {
 // | mp_num_hits_dealt_alltime                  | int(11) | YES  |     | 0       |       |
 // | mp_num_hits_received_alltime               | int(11) | YES  |     | 0       |       |
 // | mp_num_misses_dealt_alltime                | int(11) | YES  |     | 0       |       |
-// | mp_highest_accuracy_in_a_match             | float   | YES  |     | 0       |       |
+// | mp_average_accuracy                        | float   | YES  |     | 0       |       |
 // | mp_num_kills_alltime                       | int(11) | YES  |     | 0       |       |
 // | mp_num_deaths_by_other_players_alltime     | int(11) | YES  |     | 0       |       |
 // | mp_num_deaths_alltime                      | int(11) | YES  |     | 0       |       |
