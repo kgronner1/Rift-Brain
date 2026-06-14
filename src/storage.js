@@ -548,12 +548,13 @@ async function getUserAccolades(user_id) {
 // | user_id                                    | int(11) | NO   | PRI | NULL    |       |
 // | currency_amount                            | int(11) | YES  |     | 0       |       |
 // | currency_earned_alltime                    | int(11) | YES  |     | 0       |       |
+// | num_jumps_alltime                          | int(11) | YES  |     | 0       |       |
+// | num_unique_planets_visited_alltime         | int(11) | YES  |     | 0       |       |
 // | sp_most_currency_earned_in_a_run           | int(11) | YES  |     | 0       |       |
 // | sp_currency_earned_alltime                 | int(11) | YES  |     | 0       |       |
 // | sp_highest_combo_alltime                   | int(11) | YES  |     | 0       |       |
 // | sp_most_jumps_in_a_run                     | int(11) | YES  |     | 0       |       |
 // | sp_most_unique_planets_visited_in_a_run    | int(11) | YES  |     | 0       |       |
-// | num_unique_planets_visited_alltime         | int(11) | YES  |     | 0       |       |
 // | sp_most_levels_completed_in_a_run          | int(11) | YES  |     | 0       |       |
 // | sp_num_levels_completed_alltime            | int(11) | YES  |     | 0       |       |
 // | sp_most_asteroids_hit_in_a_run             | int(11) | YES  |     | 0       |       |
@@ -576,7 +577,6 @@ async function getUserAccolades(user_id) {
 // | mp_longest_time_spent_alive_in_a_match_sec | float   | YES  |     | 0       |       |
 // | mp_total_time_spent_in_a_match_sec_alltime | float   | YES  |     | 0       |       |
 // | mp_most_jumps_in_a_match                   | int(11) | YES  |     | 0       |       |
-// | num_jumps_alltime                       | int(11) | YES  |     | 0       |       |
 // +--------------------------------------------+---------+------+-----+---------+-------+
 
 
