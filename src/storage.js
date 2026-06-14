@@ -401,10 +401,12 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
 
   // accuracy 
   const match_accuracy = match_stats.numHits / (match_stats.numMisses + match_stats.numHits);
-  if (updated_player_stats.mp_highest_accuracy_in_a_match.value < match_accuracy) {
-    updated_player_stats.mp_highest_accuracy_in_a_match.value = match_accuracy;
-    updated_player_stats.mp_highest_accuracy_in_a_match.new_record = 1;
-  }
+  const alltime_accuracy = updated_player_stats.mp_num_hits_dealt_alltime / Math.max(updated_player_stats.mp_num_hits_dealt_alltime + updated_player_stats.mp_num_misses_dealt_alltime, 1);
+  updated_player_stats.mp_average_accuracy.value = alltime_accuracy;
+  // if (updated_player_stats.mp_highest_accuracy_in_a_match.value < match_accuracy) {
+  //   updated_player_stats.mp_highest_accuracy_in_a_match.value = match_accuracy;
+  //   updated_player_stats.mp_highest_accuracy_in_a_match.new_record = 1;
+  // }
 
   // kills
   updated_player_stats.mp_num_kills_alltime.value += match_stats.numKills;
@@ -580,7 +582,7 @@ async function getUserAccolades(user_id) {
 // | mp_longest_time_spent_alive_in_a_match_sec | float   | YES  |     | 0       |       |
 // | mp_total_time_spent_in_a_match_sec_alltime | float   | YES  |     | 0       |       |
 // | mp_most_jumps_in_a_match                   | int(11) | YES  |     | 0       |       |
-// | num_jumps_alltime                          | int(11) | YES  |     | 0       |       |
+// | mp_num_items_stolen_alltime                | int(11) | YES  |     | 0       |       |
 // +--------------------------------------------+---------+------+-----+---------+-------+
 
 
