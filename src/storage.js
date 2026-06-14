@@ -439,7 +439,7 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
   updated_player_stats.mp_num_jumps_alltime.value += match_stats.numJumps;
 
   // unique planets visited
-  updated_player_stats.sp_num_unique_planets_visited_alltime.value += match_stats.numUniquePlanetsVisited;
+  updated_player_stats.num_unique_planets_visited_alltime.value += match_stats.numUniquePlanetsVisited;
 
   return updated_player_stats;
 
@@ -554,7 +554,7 @@ async function getUserAccolades(user_id) {
 // | sp_most_jumps_in_a_run                     | int(11) | YES  |     | 0       |       |
 // | sp_num_jumps_alltime                       | int(11) | YES  |     | 0       |       |
 // | sp_most_unique_planets_visited_in_a_run    | int(11) | YES  |     | 0       |       |
-// | sp_num_unique_planets_visited_alltime      | int(11) | YES  |     | 0       |       |
+// | num_unique_planets_visited_alltime         | int(11) | YES  |     | 0       |       |
 // | sp_most_levels_completed_in_a_run          | int(11) | YES  |     | 0       |       |
 // | sp_num_levels_completed_alltime            | int(11) | YES  |     | 0       |       |
 // | sp_most_asteroids_hit_in_a_run             | int(11) | YES  |     | 0       |       |
