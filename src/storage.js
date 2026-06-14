@@ -436,7 +436,7 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
     updated_player_stats.mp_most_jumps_in_a_match.new_record = 1;
   }
 
-  updated_player_stats.mp_num_jumps_alltime.value += match_stats.numJumps;
+  updated_player_stats.num_jumps_alltime.value += match_stats.numJumps;
 
   // unique planets visited
   updated_player_stats.num_unique_planets_visited_alltime.value += match_stats.numUniquePlanetsVisited;
@@ -552,7 +552,6 @@ async function getUserAccolades(user_id) {
 // | sp_currency_earned_alltime                 | int(11) | YES  |     | 0       |       |
 // | sp_highest_combo_alltime                   | int(11) | YES  |     | 0       |       |
 // | sp_most_jumps_in_a_run                     | int(11) | YES  |     | 0       |       |
-// | sp_num_jumps_alltime                       | int(11) | YES  |     | 0       |       |
 // | sp_most_unique_planets_visited_in_a_run    | int(11) | YES  |     | 0       |       |
 // | num_unique_planets_visited_alltime         | int(11) | YES  |     | 0       |       |
 // | sp_most_levels_completed_in_a_run          | int(11) | YES  |     | 0       |       |
@@ -577,7 +576,7 @@ async function getUserAccolades(user_id) {
 // | mp_longest_time_spent_alive_in_a_match_sec | float   | YES  |     | 0       |       |
 // | mp_total_time_spent_in_a_match_sec_alltime | float   | YES  |     | 0       |       |
 // | mp_most_jumps_in_a_match                   | int(11) | YES  |     | 0       |       |
-// | mp_num_jumps_alltime                       | int(11) | YES  |     | 0       |       |
+// | num_jumps_alltime                       | int(11) | YES  |     | 0       |       |
 // +--------------------------------------------+---------+------+-----+---------+-------+
 
 
