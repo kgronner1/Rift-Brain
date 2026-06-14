@@ -456,42 +456,82 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
 
 }
 
-// +---------------------+------------------+------+-----+---------+-------+
-// | user_id             | int(10) unsigned | NO   | PRI | NULL    |       |
-// | Beaming             | int(10) unsigned | YES  |     | 0       |       |
-// | BigAssister         | int(10) unsigned | YES  |     | 0       |       |
-// | Bully               | int(10) unsigned | YES  |     | 0       |       |
-// | CleanUpCrew         | int(10) unsigned | YES  |     | 0       |       |
-// | ColdBlooded         | int(10) unsigned | YES  |     | 0       |       |
-// | Deflector           | int(10) unsigned | YES  |     | 0       |       |
-// | EarlyBird           | int(10) unsigned | YES  |     | 0       |       |
-// | Egalitarian         | int(10) unsigned | YES  |     | 0       |       |
-// | EtTuBrute           | int(10) unsigned | YES  |     | 0       |       |
-// | FreezeFrame         | int(10) unsigned | YES  |     | 0       |       |
-// | Ghost               | int(10) unsigned | YES  |     | 0       |       |
-// | GreenMachine        | int(10) unsigned | YES  |     | 0       |       |
-// | InYourFace          | int(10) unsigned | YES  |     | 0       |       |
-// | IrishGoodbye        | int(10) unsigned | YES  |     | 0       |       |
-// | Jumpy               | int(10) unsigned | YES  |     | 0       |       |
-// | LongShot            | int(10) unsigned | YES  |     | 0       |       |
-// | MachineGun          | int(10) unsigned | YES  |     | 0       |       |
-// | Nemesis             | int(10) unsigned | YES  |     | 0       |       |
-// | OneInchPunch        | int(10) unsigned | YES  |     | 0       |       |
-// | Pacifist            | int(10) unsigned | YES  |     | 0       |       |
-// | Pyromaniac          | int(10) unsigned | YES  |     | 0       |       |
-// | Quigley             | int(10) unsigned | YES  |     | 0       |       |
-// | RiftJumper          | int(10) unsigned | YES  |     | 0       |       |
-// | Sharpshooter        | int(10) unsigned | YES  |     | 0       |       |
-// | Sniper              | int(10) unsigned | YES  |     | 0       |       |
-// | StepInTheArena      | int(10) unsigned | YES  |     | 0       |       |
-// | StopHittingYourself | int(10) unsigned | YES  |     | 0       |       |
-// | StudentDriver       | int(10) unsigned | YES  |     | 0       |       |
-// | TheLateShow         | int(10) unsigned | YES  |     | 0       |       |
-// | TriggerHappy        | int(10) unsigned | YES  |     | 0       |       |
-// | Underdog            | int(10) unsigned | YES  |     | 0       |       |
-// | VarietyShow         | int(10) unsigned | YES  |     | 0       |       |
-// +---------------------+------------------+------+-----+---------+-------+
-
+// +---------------------+------------------+------+-----+---------------------+-------------------------------+
+// | Field               | Type             | Null | Key | Default             | Extra                         |
+// +---------------------+------------------+------+-----+---------------------+-------------------------------+
+// | user_id             | int(10) unsigned | NO   | PRI | NULL                |                               |
+// | Beaming             | int(10) unsigned | YES  |     | 0                   |                               |
+// | BigAssister         | int(10) unsigned | YES  |     | 0                   |                               |
+// | Bully               | int(10) unsigned | YES  |     | 0                   |                               |
+// | CleanUpCrew         | int(10) unsigned | YES  |     | 0                   |                               |
+// | ColdBlooded         | int(10) unsigned | YES  |     | 0                   |                               |
+// | Deflector           | int(10) unsigned | YES  |     | 0                   |                               |
+// | EarlyBird           | int(10) unsigned | YES  |     | 0                   |                               |
+// | Egalitarian         | int(10) unsigned | YES  |     | 0                   |                               |
+// | EtTuBrute           | int(10) unsigned | YES  |     | 0                   |                               |
+// | FreezeFrame         | int(10) unsigned | YES  |     | 0                   |                               |
+// | Ghost               | int(10) unsigned | YES  |     | 0                   |                               |
+// | GreenMachine        | int(10) unsigned | YES  |     | 0                   |                               |
+// | InYourFace          | int(10) unsigned | YES  |     | 0                   |                               |
+// | IrishGoodbye        | int(10) unsigned | YES  |     | 0                   |                               |
+// | Jumpy               | int(10) unsigned | YES  |     | 0                   |                               |
+// | LongShot            | int(10) unsigned | YES  |     | 0                   |                               |
+// | MachineGun          | int(10) unsigned | YES  |     | 0                   |                               |
+// | Nemesis             | int(10) unsigned | YES  |     | 0                   |                               |
+// | OneInchPunch        | int(10) unsigned | YES  |     | 0                   |                               |
+// | Pacifist            | int(10) unsigned | YES  |     | 0                   |                               |
+// | Pyromaniac          | int(10) unsigned | YES  |     | 0                   |                               |
+// | Quigley             | int(10) unsigned | YES  |     | 0                   |                               |
+// | RiftJumper          | int(10) unsigned | YES  |     | 0                   |                               |
+// | Sharpshooter        | int(10) unsigned | YES  |     | 0                   |                               |
+// | Sniper              | int(10) unsigned | YES  |     | 0                   |                               |
+// | StepInTheArena      | int(10) unsigned | YES  |     | 0                   |                               |
+// | StopHittingYourself | int(10) unsigned | YES  |     | 0                   |                               |
+// | StudentDriver       | int(10) unsigned | YES  |     | 0                   |                               |
+// | TheLateShow         | int(10) unsigned | YES  |     | 0                   |                               |
+// | TriggerHappy        | int(10) unsigned | YES  |     | 0                   |                               |
+// | Underdog            | int(10) unsigned | YES  |     | 0                   |                               |
+// | VarietyShow         | int(10) unsigned | YES  |     | 0                   |                               |
+// | Hoarder             | int(10) unsigned | NO   |     | 0                   |                               |
+// | Bigwig              | int(10) unsigned | NO   |     | 0                   |                               |
+// | MonocleWearer       | int(10) unsigned | NO   |     | 0                   |                               |
+// | ScroogeMcDuck       | int(10) unsigned | NO   |     | 0                   |                               |
+// | CREAM               | int(10) unsigned | NO   |     | 0                   |                               |
+// | TakeaTen            | int(10) unsigned | NO   |     | 0                   |                               |
+// | GideonsHammock      | int(10) unsigned | NO   |     | 0                   |                               |
+// | AroundtheBlock      | int(10) unsigned | NO   |     | 0                   |                               |
+// | Tourist             | int(10) unsigned | NO   |     | 0                   |                               |
+// | Nomad               | int(10) unsigned | NO   |     | 0                   |                               |
+// | Globetrotter        | int(10) unsigned | NO   |     | 0                   |                               |
+// | Grasshopper         | int(10) unsigned | NO   |     | 0                   |                               |
+// | ForJoy              | int(10) unsigned | NO   |     | 0                   |                               |
+// | SharkJumper         | int(10) unsigned | NO   |     | 0                   |                               |
+// | StickyFingers       | int(10) unsigned | NO   |     | 0                   |                               |
+// | Ace                 | int(10) unsigned | NO   |     | 0                   |                               |
+// | OneSmallStep        | int(10) unsigned | NO   |     | 0                   |                               |
+// | HonestDaysWork      | int(10) unsigned | NO   |     | 0                   |                               |
+// | AModestIncome       | int(10) unsigned | NO   |     | 0                   |                               |
+// | TheBacon            | int(10) unsigned | NO   |     | 0                   |                               |
+// | TheLongHaul         | int(10) unsigned | NO   |     | 0                   |                               |
+// | Loaded              | int(10) unsigned | NO   |     | 0                   |                               |
+// | Entourage           | int(10) unsigned | NO   |     | 0                   |                               |
+// | CultFollowing       | int(10) unsigned | NO   |     | 0                   |                               |
+// | Streaker            | int(10) unsigned | NO   |     | 0                   |                               |
+// | DucksinaRow         | int(10) unsigned | NO   |     | 0                   |                               |
+// | Eureka              | int(10) unsigned | NO   |     | 0                   |                               |
+// | PrematureFinisher   | int(10) unsigned | NO   |     | 0                   |                               |
+// | LeavingAlready      | int(10) unsigned | NO   |     | 0                   |                               |
+// | CouldveBeenanEmail  | int(10) unsigned | NO   |     | 0                   |                               |
+// | EnduranceAthlete    | int(10) unsigned | NO   |     | 0                   |                               |
+// | AscendantAttention  | int(10) unsigned | NO   |     | 0                   |                               |
+// | LikeClockwork       | int(10) unsigned | NO   |     | 0                   |                               |
+// | KeepitOneHundred    | int(10) unsigned | NO   |     | 0                   |                               |
+// | Quicksilver         | int(10) unsigned | NO   |     | 0                   |                               |
+// | FrequentFlyer       | int(10) unsigned | NO   |     | 0                   |                               |
+// | LudicrousSpeed      | int(10) unsigned | NO   |     | 0                   |                               |
+// | FTL                 | int(10) unsigned | NO   |     | 0                   |                               |
+// | _last_updated       | timestamp        | NO   |     | current_timestamp() | on update current_timestamp() |
+// +---------------------+------------------+------+-----+---------------------+-------------------------------+
 
 async function getUserAccolades(user_id) {
 
