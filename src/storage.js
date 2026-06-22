@@ -6,6 +6,36 @@ const path = require('path');
 
 let userStatsColumnsCache = null;
 
+// In-memory set of valid accolade column names, seeded from user_accolades at startup.
+// Refreshed on a short TTL so newly added accolade columns become valid without a restart.
+let accoladeColumnsCache = null;
+let accoladeColumnsCacheRefreshedAt = 0;
+const ACCOLADE_COLUMNS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function loadAccoladeColumns() {
+  const now = Date.now();
+  if (accoladeColumnsCache && (now - accoladeColumnsCacheRefreshedAt) < ACCOLADE_COLUMNS_CACHE_TTL_MS) {
+    return accoladeColumnsCache;
+  }
+  const db = getDB();
+  const [rows] = await db.execute(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_accolades'
+       AND COLUMN_NAME NOT IN ('user_id', '_last_updated')
+     ORDER BY ORDINAL_POSITION;`
+  );
+  accoladeColumnsCache = new Set(rows.map(r => r.COLUMN_NAME));
+  accoladeColumnsCacheRefreshedAt = now;
+  return accoladeColumnsCache;
+}
+
+async function isValidAccoladeKey(key) {
+  if (typeof key !== 'string' || key.length === 0 || key.length > 64) return false;
+  const set = await loadAccoladeColumns();
+  return set.has(key);
+}
+
 async function loadUserStatsColumns() {
   if (userStatsColumnsCache) return userStatsColumnsCache;
   const db = getDB();
@@ -156,49 +186,27 @@ async function createUser(user) {
     access_token
   ];
 
+  const connection = await db.getConnection();
   try {
-    // Execute the query
-    const [result] = await db.execute(query, values);
-    
-    // Log the result (optional)
+    await connection.beginTransaction();
+
+    const [result] = await connection.execute(query, values);
     console.log(result);
 
-    // create user_stats insert
-    const user_stats_query = `
-      INSERT INTO user_stats (user_id) VALUES (?)
-    `;
-    const user_stats_values = [
-      result.insertId
-    ];
-    const [user_stats_result] = await db.execute(user_stats_query, user_stats_values);
+    const newId = result.insertId;
+    await connection.execute(`INSERT INTO user_stats (user_id) VALUES (?)`, [newId]);
+    await connection.execute(`INSERT INTO user_accolades (user_id) VALUES (?)`, [newId]);
+    await connection.execute(`INSERT INTO user_accolades_time_earned (user_id) VALUES (?)`, [newId]);
+    await connection.execute(`INSERT INTO user_player_card (user_id) VALUES (?)`, [newId]);
 
-    // create user_accolades insert
-    const user_accolades_query = `
-      INSERT INTO user_accolades (user_id) VALUES (?)
-    `;
-    const user_accolades_values = [
-      result.insertId
-    ];
-    const [user_accolades_result] = await db.execute(user_accolades_query, user_accolades_values);
-
-
-    // create user_accolades insert
-    const user_accolades_time_earned_query = `
-      INSERT INTO user_accolades_time_earned (user_id) VALUES (?)
-    `;
-    const user_accolades_time_earned_values = [
-      result.insertId
-    ];
-    const [user_accolades_time_earned_result] = await db.execute(user_accolades_time_earned_query, user_accolades_time_earned_values);
-
-
-
-    // Return the user_id (assuming auto-increment)
-    return {"user":user, "user_id":result.insertId, "access_token": access_token}; // The ID of the newly created user
+    await connection.commit();
+    return { "user": user, "user_id": newId, "access_token": access_token };
   } catch (error) {
-    // Handle any errors
+    await connection.rollback();
     console.error('Error creating user:', error);
     throw error;
+  } finally {
+    connection.release();
   }
 }
 
@@ -882,6 +890,84 @@ async function singlePlayerStatsSync(body) {
 
 }
 
+// // // // // // // // PLAYER CARD STORAGE FUNCTIONS // // // // // // // //
+
+async function getPlayerCard(user_id) {
+  const db = getDB();
+  // LEFT JOIN so a missing card row degrades to defaults instead of erroring.
+  const [rows] = await db.execute(
+    `SELECT u.user_id,
+            COALESCE(pc.equipped_accolade_key, '') AS equipped_accolade_key
+     FROM users u
+     LEFT JOIN user_player_card pc ON pc.user_id = u.user_id
+     WHERE u.user_id = ?
+     LIMIT 1;`,
+    [user_id]
+  );
+  if (!rows[0]) return null;
+
+  let equipped = rows[0].equipped_accolade_key;
+
+  // Read-time validation: if the key is no longer in the allow-list or the player's
+  // earn count is 0, return '' so stale/corrected data never stays displayed.
+  if (equipped) {
+    const valid = await isValidAccoladeKey(equipped);
+    if (!valid) {
+      equipped = '';
+    } else {
+      const [earnRows] = await db.execute(
+        `SELECT \`${equipped}\` AS cnt FROM user_accolades WHERE user_id = ? LIMIT 1;`,
+        [user_id]
+      );
+      if (!earnRows[0] || earnRows[0].cnt === 0) {
+        equipped = '';
+      }
+    }
+  }
+
+  return { user_id: rows[0].user_id, equipped_accolade_key: equipped };
+}
+
+async function getPlayerCards(user_ids) {
+  const results = await Promise.all(user_ids.map(id => getPlayerCard(id)));
+  return results.filter(r => r !== null);
+}
+
+async function setPlayerCard(user_id, access_token, equipped_accolade_key) {
+  const db = getDB();
+
+  // Inline auth: reject unless the token matches the user.
+  const [authRows] = await db.execute(
+    `SELECT user_id FROM users WHERE user_id = ? AND access_token = ? LIMIT 1;`,
+    [user_id, access_token]
+  );
+  if (!authRows[0]) throw new Error('Unauthorized');
+
+  // Validate key against the in-memory allow-list, then check the player's earn count.
+  let key = '';
+  if (typeof equipped_accolade_key === 'string' && equipped_accolade_key !== '') {
+    const valid = await isValidAccoladeKey(equipped_accolade_key);
+    if (valid) {
+      const [earnRows] = await db.execute(
+        `SELECT \`${equipped_accolade_key}\` AS cnt FROM user_accolades WHERE user_id = ? LIMIT 1;`,
+        [user_id]
+      );
+      if (earnRows[0] && earnRows[0].cnt > 0) {
+        key = equipped_accolade_key;
+      }
+    }
+  }
+
+  await db.execute(
+    `INSERT INTO user_player_card (user_id, equipped_accolade_key)
+     VALUES (?, ?)
+     ON DUPLICATE KEY UPDATE equipped_accolade_key = ?;`,
+    [user_id, key, key]
+  );
+
+  return { user_id, equipped_accolade_key: key };
+}
+
 // // // // // // // // // // // // // storage response api // // // // // // // // // // // // //
 
 function registerStorageRoutes(app) {
@@ -1165,6 +1251,58 @@ function registerStorageRoutes(app) {
   });
 
   //// stats ////
+
+  //// player card ////
+
+  // Server-to-server only — not called directly by clients.
+  app.get('/player_card', async function (req, res) {
+    try {
+      const user_id = Number(req.query.user_id);
+      if (!Number.isInteger(user_id) || user_id <= 0) throw new Error('Invalid user_id');
+      const card = await getPlayerCard(user_id);
+      if (!card) throw new Error('User not found');
+      res.status(200).json({ success: true, message: '', data: card });
+    } catch (error) {
+      console.error('GET /player_card failed:', error.message);
+      res.status(400).json({ success: false, message: error.message });
+    }
+  });
+
+  // Batch version — retained for admin/analytics contexts; not used in the lobby flow.
+  app.get('/player_cards', async function (req, res) {
+    try {
+      const raw = req.query.user_ids;
+      if (!raw) throw new Error('Missing user_ids');
+      const user_ids = String(raw).split(',').map(Number).filter(n => Number.isInteger(n) && n > 0);
+      if (user_ids.length === 0) throw new Error('No valid user_ids');
+      const cards = await getPlayerCards(user_ids);
+      res.status(200).json({ success: true, message: '', data: cards });
+    } catch (error) {
+      console.error('GET /player_cards failed:', error.message);
+      res.status(400).json({ success: false, message: error.message });
+    }
+  });
+
+  // Called by the authenticated player (client -> backend) to equip an accolade.
+  app.put('/player_card', async function (req, res) {
+    try {
+      const user_id = Number(req.body.user_id);
+      if (!Number.isInteger(user_id) || user_id <= 0) throw new Error('Invalid user_id');
+      const access_token = req.body.access_token;
+      if (!access_token) throw new Error('Missing access_token');
+      const equipped_accolade_key = req.body.equipped_accolade_key ?? '';
+      const result = await setPlayerCard(user_id, access_token, equipped_accolade_key);
+      res.status(200).json({ success: true, message: '', data: result });
+    } catch (error) {
+      if (error.message === 'Unauthorized') {
+        return res.status(403).json({ success: false, message: 'Unauthorized' });
+      }
+      console.error('PUT /player_card failed:', error.message);
+      res.status(400).json({ success: false, message: error.message });
+    }
+  });
+
+  //// player card ////
 
 } // registerStorageRoutes
 
