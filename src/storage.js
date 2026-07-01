@@ -407,9 +407,8 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
   updated_player_stats.mp_num_hits_received_alltime.value += match_stats.numHitsReceived;
   updated_player_stats.mp_num_misses_dealt_alltime.value += match_stats.numMisses;
 
-  // accuracy 
-  const match_accuracy = match_stats.numHits / (match_stats.numMisses + match_stats.numHits);
-  const alltime_accuracy = updated_player_stats.mp_num_hits_dealt_alltime / Math.max(updated_player_stats.mp_num_hits_dealt_alltime + updated_player_stats.mp_num_misses_dealt_alltime, 1);
+  // accuracy
+  const alltime_accuracy = updated_player_stats.mp_num_hits_dealt_alltime.value / Math.max(updated_player_stats.mp_num_hits_dealt_alltime.value + updated_player_stats.mp_num_misses_dealt_alltime.value, 1);
   updated_player_stats.mp_average_accuracy.value = alltime_accuracy;
 
   // kills
