@@ -35,3 +35,23 @@ TO MANUALLY START SERVER:
 node ./src/app.js
 
 Must be done in Rift-Brain folder for .env reasons
+
+## Layout (RJ 462)
+
+```
+src/app.js              bootstrap: env, database, lobby registry, listeners
+src/config/env.js       every setting, from .env, validated at boot (see .env.example)
+src/db.js               the MySQL pool
+src/match/lobbies.js    game instances and the join queue (in process memory)
+src/match/ports.js      which game port is free
+src/match/process.js    spawning and killing game server processes
+src/storage/            today's storage.js, split by table
+src/routes/legacy/      today's routes, unchanged in path and shape; they go at cutover
+test/                   npm test (node --test); pure tests need no database
+```
+
+With `ENV` unset the brain behaves exactly as before RJ 462 (port 3000 on every interface, UDP 8080-8085,
+the single server binary in /home/ec2-user), so the legacy box keeps its `.env` as it is. A new environment
+(`ENV=dev|alpha|prod`) must spell out `PUBLIC_PORT`, `GAME_PORTS` and `SERVER_BINARY`, and binds 127.0.0.1.
+
+`npm test` runs every test. Database tests run only when `RJ_TEST_DB` is set.
