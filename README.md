@@ -48,7 +48,11 @@ src/match/process.js    spawning and killing game server processes
 src/storage/            today's storage.js, split by table
 src/routes/legacy/      today's routes, unchanged in path and shape; they go at cutover
 src/migrate.js          schema migrations (see "Migrations")
+src/config/remoteSchema.js  the remote config document's rules (RJ 463)
 test/                   npm test (node --test); pure tests need no database
+config/                 the remote config documents, one per environment (RJ 463)
+ops/config/             validate.mjs, publish.sh, rollback.sh (RJ 463)
+infra/                  CloudFormation, the box's provisioning, and their tests (RJ 463): infra/README.md
 ```
 
 With `ENV` unset the brain behaves exactly as before RJ 462 (port 3000 on every interface, UDP 8080-8085,

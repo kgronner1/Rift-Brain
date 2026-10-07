@@ -1,0 +1,190 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Rift Jumpers edge (RJ 463): config.<domain> -- a private, versioned S3 bucket behind CloudFront, with its
+  DNS-validated certificate and alias records. Deploy in us-east-1 (CloudFront takes ACM certificates from there
+  only). Takes the existing hosted zone; never creates one. Deleting the stack keeps the bucket (DeletionPolicy
+  Retain), so a delete-stack always completes; the published documents' sources are in git.
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: riftjumpers.space
+    AllowedPattern: '^[a-z0-9-]+(\.[a-z0-9-]+)+$'
+    Description: The registered domain. Its hosted zone must already exist (HostedZoneId).
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: The existing public hosted zone for DomainName (aws route53 list-hosted-zones-by-name).
+  ConfigSubdomain:
+    Type: String
+    Default: config
+    AllowedPattern: '^[a-z0-9-]+$'
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub '${ConfigSubdomain}.${DomainName}'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub '${ConfigSubdomain}.${DomainName}'
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: project
+          Value: rift-jumpers
+
+  Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'rj-config-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # rollback.sh reads earlier versions; keep a year of them, and always the 50 newest.
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 365
+              NewerNoncurrentVersions: 50
+      Tags:
+        - Key: project
+          Value: rift-jumpers
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'rj-config-${AWS::AccountId}'
+        Description: CloudFront reads the config bucket; nothing else can.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Honours the origin's Cache-Control (publish.sh sets max-age=60); 60 s when an object has none. The cache key
+  # carries no query string, header or cookie, so a client cannot bust the cache and reach S3 per request.
+  CachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub 'rj-config-${AWS::AccountId}'
+        Comment: Honour origin Cache-Control; default 60 s
+        MinTTL: 0
+        DefaultTTL: 60
+        MaxTTL: 3600
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          CookiesConfig:
+            CookieBehavior: none
+          HeadersConfig:
+            HeaderBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub 'Rift Jumpers remote config (${ConfigSubdomain}.${DomainName})'
+        Enabled: true
+        Aliases:
+          - !Sub '${ConfigSubdomain}.${DomainName}'
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: config-bucket
+            DomainName: !GetAtt Bucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: config-bucket
+          ViewerProtocolPolicy: https-only
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: !Ref CachePolicy
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+      Tags:
+        - Key: project
+          Value: rift-jumpers
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CloudFrontReadsThroughOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${Bucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt Bucket.Arn
+              - !Sub '${Bucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  AliasA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '${ConfigSubdomain}.${DomainName}.'
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        # The fixed hosted zone id of every CloudFront distribution.
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+  AliasAAAA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '${ConfigSubdomain}.${DomainName}.'
+      Type: AAAA
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+Outputs:
+  BucketName:
+    Value: !Ref Bucket
+  DistributionId:
+    Value: !Ref Distribution
+  DistributionDomain:
+    Value: !GetAtt Distribution.DomainName
+  CertificateArn:
+    Value: !Ref Certificate
+  ConfigBaseUrl:
+    Value: !Sub 'https://${ConfigSubdomain}.${DomainName}/'

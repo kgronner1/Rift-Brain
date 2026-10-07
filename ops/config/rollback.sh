@@ -13,6 +13,7 @@
 # (config/<env>.client.v1.json) match, and commit it.
 set -euo pipefail
 
+# shellcheck source-path=SCRIPTDIR source=_lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib.sh"
 
 ENV_NAME=""

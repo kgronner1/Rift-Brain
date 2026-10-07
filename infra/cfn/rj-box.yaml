@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Rift Jumpers box (RJ 463): the security group rj-public (HTTPS for Caddy, the alpha and dev game-server UDP
+  ranges, SSH from listed CIDRs) and the api / api-dev / play A records. Deploy in the box's region (us-west-1).
+  The instance and its old security group are not managed here: infra/deploy_stacks.sh attaches rj-public beside
+  the old group, which keeps TCP 3000 and UDP 8080-8085 open for today's builds until cutover.
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: riftjumpers.space
+    AllowedPattern: '^[a-z0-9-]+(\.[a-z0-9-]+)+$'
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: The existing public hosted zone for DomainName.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: The box's VPC.
+  BoxPublicIp:
+    Type: String
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}$'
+    Description: The box's public IPv4 address, which the A records point at.
+  SshCidr1:
+    Type: String
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    Description: A CIDR allowed to SSH (port 22).
+  SshCidr2:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    Description: Another CIDR allowed to SSH, or empty.
+  SshCidr3:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    Description: Another CIDR allowed to SSH, or empty.
+  RecordTtl:
+    Type: Number
+    Default: 300
+    MinValue: 60
+    MaxValue: 86400
+
+Conditions:
+  HasSsh2: !Not [!Equals [!Ref SshCidr2, '']]
+  HasSsh3: !Not [!Equals [!Ref SshCidr3, '']]
+
+Resources:
+  PublicSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: rj-public
+      GroupDescription: Rift Jumpers - Caddy HTTPS, game servers (alpha 8090-8099, dev 8100-8104), SSH
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: ACME HTTP challenge and the redirect to HTTPS (Caddy)
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: api / api-dev over HTTPS (Caddy)
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: alpha game servers (ENet)
+          IpProtocol: udp
+          FromPort: 8090
+          ToPort: 8099
+          CidrIp: 0.0.0.0/0
+        - Description: dev game servers (ENet)
+          IpProtocol: udp
+          FromPort: 8100
+          ToPort: 8104
+          CidrIp: 0.0.0.0/0
+        - Description: SSH
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SshCidr1
+        - !If
+          - HasSsh2
+          - Description: SSH
+            IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref SshCidr2
+          - !Ref AWS::NoValue
+        - !If
+          - HasSsh3
+          - Description: SSH
+            IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref SshCidr3
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: rj-public
+        - Key: project
+          Value: rift-jumpers
+
+  ApiRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub 'api.${DomainName}.'
+      Type: A
+      TTL: !Ref RecordTtl
+      ResourceRecords: [!Ref BoxPublicIp]
+
+  ApiDevRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub 'api-dev.${DomainName}.'
+      Type: A
+      TTL: !Ref RecordTtl
+      ResourceRecords: [!Ref BoxPublicIp]
+
+  PlayRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub 'play.${DomainName}.'
+      Type: A
+      TTL: !Ref RecordTtl
+      ResourceRecords: [!Ref BoxPublicIp]
+
+Outputs:
+  SecurityGroupId:
+    Value: !Ref PublicSecurityGroup
+  BoxPublicIp:
+    Value: !Ref BoxPublicIp

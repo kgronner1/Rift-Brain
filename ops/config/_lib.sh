@@ -1,9 +1,11 @@
+# shellcheck shell=bash source-path=SCRIPTDIR
 # Shared by publish.sh and rollback.sh. Sourced from bash, never from zsh.
 
 OPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$OPS_DIR/../.." && pwd)"
 # shellcheck source=../../infra/stacks.env
 . "$REPO_DIR/infra/stacks.env"
+# shellcheck disable=SC2034 # used by the scripts that source this
 DOC_MJS="$OPS_DIR/doc.mjs"
 
 die() {
@@ -26,6 +28,7 @@ aws_rj() {
 # Sets CONFIG_BUCKET and CONFIG_DISTRIBUTION from rj-edge's outputs (read-only).
 edge_outputs() {
   local out
+  # shellcheck disable=SC2016 # a JMESPath query, not shell
   out="$(aws_rj cloudformation describe-stacks --region "$RJ_EDGE_REGION" --stack-name "$RJ_EDGE_STACK" \
     --query 'Stacks[0].Outputs[?OutputKey==`BucketName` || OutputKey==`DistributionId`].[OutputKey,OutputValue]' \
     --output text 2>&1)" || die "cannot read stack $RJ_EDGE_STACK in $RJ_EDGE_REGION (deployed yet? infra/deploy_stacks.sh): $out"

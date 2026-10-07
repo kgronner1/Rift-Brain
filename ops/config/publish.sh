@@ -23,6 +23,7 @@
 # An emergency publish from a working tree must be committed straight after; the script says so.
 set -euo pipefail
 
+# shellcheck source-path=SCRIPTDIR source=_lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib.sh"
 
 ENV_NAME=""
@@ -126,7 +127,7 @@ case "$LOCK_RC" in
   0) note "this change locks no build out" ;;
   3)
     echo "This change locks builds out:"
-    sed 's/^/  - /' <<<"$LOCKS"
+    while IFS= read -r line; do echo "  - $line"; done <<<"$LOCKS"
     if [ "$CONFIRM_LOCK" = 1 ]; then
       note "--confirm-lock given: going ahead"
     elif [ "$DRY_RUN" = 1 ]; then

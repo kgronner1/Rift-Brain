@@ -1,0 +1,5 @@
+# Written by Rift-Brain infra/box/provision.sh (RJ 463); a re-run overwrites it.
+# One site file per environment in /etc/caddy/sites/ (dev.caddy, alpha.caddy), from infra/box/site.caddy.tmpl.
+# The admin API stays on localhost:2019 (the default); "caddy reload" uses it.
+
+import /etc/caddy/sites/*.caddy
