@@ -54,8 +54,10 @@ that, drop it. Step 6 needs the commit it runs pushed to GitHub (the box clones 
 (Caddy fetches api-dev's certificate on first start).
 
 After step 6: https://api-dev.riftjumpers.space/ is the dev brain (today's legacy routes, on the copy), and
-with the brain stopped it answers 503 with the `NET_UNREACHABLE` envelope. Dev multiplayer starts with M4
-(no server binary is deployed to `/opt/rj/dev/servers` yet).
+with the brain stopped it answers 503 with the `NET_UNREACHABLE` envelope. Dev multiplayer starts with M4 (RJ 466):
+the brain then matches through `/v1/match/join` and runs the binaries `/opt/rj/dev/servers/manifest.json` names, which
+Wobble Planet's `deploy_server.sh --env dev` uploads (the root README, "Matchmaking"). A re-run of step 6 at an M4
+commit appends to an older `.env` only the M4 settings it lacks, and reports what the manifest deploys.
 
 ## Undo
 
