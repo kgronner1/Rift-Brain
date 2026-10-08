@@ -8,10 +8,7 @@ function registerLobbyRoutes(app, lobbies) {
 
   // // // // // // // // // // // // // network player instance response api // // // // // // // // // // // // //
 
-  app.get('/', function (req, res) {
-    let x = 0;
-    res.status(200).send(JSON.stringify(x));
-  });
+  registerProbeRoutes(app);
 
   app.get('/join', async function (req, res) {
     const game_instances = lobbies.game_instances;
@@ -150,9 +147,6 @@ function registerLobbyRoutes(app, lobbies) {
     res.status(200).json({ success: true });
   });
 
-  app.get('/server_health_check', function (req, res) {
-    res.json(true);
-  });
 
 
   app.get('/player_left_instance', function (req, res) {
@@ -339,4 +333,16 @@ function registerLobbyRoutes(app, lobbies) {
 
 }
 
-module.exports = { registerLobbyRoutes };
+// The two probes, which a new environment keeps without the rest (provision.sh's checks call GET /).
+function registerProbeRoutes(app) {
+  app.get('/', function (req, res) {
+    let x = 0;
+    res.status(200).send(JSON.stringify(x));
+  });
+
+  app.get('/server_health_check', function (req, res) {
+    res.json(true);
+  });
+}
+
+module.exports = { registerLobbyRoutes, registerProbeRoutes };

@@ -99,8 +99,11 @@ function loadEnv(raw = process.env) {
     return legacy ? LEGACY_DEFAULTS[name] : undefined;
   };
 
-  // A new environment spells its ports out, so it can never default onto the legacy brain's.
-  for (const name of ['PUBLIC_PORT', 'GAME_PORTS', 'SERVER_BINARY']) {
+  // A new environment spells its ports out, so it can never default onto the legacy brain's. It runs one server
+  // binary per wire protocol from SERVERS_DIR's manifest (M4), so SERVER_BINARY is the legacy brain's alone.
+  const required = legacy ? ['PUBLIC_PORT', 'GAME_PORTS', 'SERVER_BINARY']
+    : ['PUBLIC_PORT', 'GAME_PORTS', 'INTERNAL_PORT', 'SERVERS_DIR', 'GAME_HOST'];
+  for (const name of required) {
     if (pick(name) === undefined) problems.push(`${name} is required when ENV=${env}`);
   }
 
@@ -128,8 +131,24 @@ function loadEnv(raw = process.env) {
     keys[name] = v.toLowerCase();
   }
 
-  // /v1 signs sessions with it (RJ 465): a new environment cannot serve without one.
-  if (!legacy && keys.SESSION_KEY === null) problems.push(`SESSION_KEY is required when ENV=${env}`);
+  // /v1 signs sessions with SESSION_KEY (RJ 465), join tokens with JOIN_KEY and derives lobby keys from
+  // LOBBY_MASTER_KEY (M4): a new environment cannot serve without all three, and no two may be the same key.
+  if (!legacy) {
+    for (const name of KEY_NAMES) if (keys[name] === null) problems.push(`${name} is required when ENV=${env}`);
+  }
+  const given = KEY_NAMES.filter((n) => keys[n]);
+  if (new Set(given.map((n) => keys[n])).size !== given.length) problems.push(`${given.join(', ')} must be different keys`);
+
+  let serversDir = null;
+  if (!isBlank(raw.SERVERS_DIR)) {
+    serversDir = String(raw.SERVERS_DIR).trim().replace(/\/+$/, '');
+    if (!serversDir.startsWith('/')) problems.push('SERVERS_DIR must be an absolute path');
+  }
+  let serverLogsDir = null;
+  if (!isBlank(raw.SERVER_LOGS_DIR)) {
+    serverLogsDir = String(raw.SERVER_LOGS_DIR).trim().replace(/\/+$/, '');
+    if (!serverLogsDir.startsWith('/')) problems.push('SERVER_LOGS_DIR must be an absolute path');
+  }
 
   let configUrl = null;
   if (!isBlank(raw.CONFIG_URL)) {
@@ -158,8 +177,10 @@ function loadEnv(raw = process.env) {
     LOBBY_MASTER_KEY: keys.LOBBY_MASTER_KEY,
     GAME_HOST: isBlank(raw.GAME_HOST) ? null : String(raw.GAME_HOST).trim(),
     GAME_PORTS: Object.freeze(gamePorts),
-    SERVER_BINARY: pick('SERVER_BINARY'),
-    SERVERS_DIR: isBlank(raw.SERVERS_DIR) ? null : String(raw.SERVERS_DIR).trim(),
+    SERVER_BINARY: legacy ? pick('SERVER_BINARY') : null,
+    SERVERS_DIR: serversDir,
+    // Optional: each game server's stdout and stderr, as lobby-<id>.log. Unset: discarded, as the legacy brain does.
+    SERVER_LOGS_DIR: serverLogsDir,
     CONFIG_URL: configUrl,
   });
 }

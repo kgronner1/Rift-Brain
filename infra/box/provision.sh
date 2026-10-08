@@ -12,11 +12,14 @@
 #   1. Caddy (pinned release binary, checksum-verified) + its systemd unit; /etc/caddy/sites/<env>.caddy proxies
 #      <api host> -> 127.0.0.1:<public port>, and answers 503 NET_UNREACHABLE when the brain is down
 #   2. /opt/rj/<env>/{brain,servers,logs}; brain is a Rift-Brain checkout at <commit>, npm ci --omit=dev
-#   3. /opt/rj/<env>/brain/.env, only if absent (chmod 600, keys from openssl rand; they never leave the box)
+#   3. /opt/rj/<env>/brain/.env, only if absent (chmod 600, keys from openssl rand; they never leave the box); an
+#      existing one gains only the M4 settings it lacks (JOIN_KEY, LOBBY_MASTER_KEY, INTERNAL_PORT, SERVERS_DIR,
+#      GAME_HOST), and its existing lines are never changed
 #   4. the database rift_brain_<env> and its user (grants on that database only); dev is a dump-and-load copy
 #      of rift_brain, then migrate --baseline && migrate; alpha is built fresh by migrate
 #   5. pm2 app rift-brain-<env> (treekill: false), pm2 save
-#   6. checks: the brain answers on 127.0.0.1, and through Caddy over HTTPS
+#   6. checks: the brain answers on 127.0.0.1 (public and internal listeners), and through Caddy over HTTPS; reports
+#      what the per-protocol manifest (servers/manifest.json, written by Wobble Planet's deploy_server.sh) deploys
 #
 # Never touched: the legacy rift-brain pm2 app, its checkout and .env, the rift_brain database (read only, by
 # mysqldump), the legacy server binary, TCP 3000 and UDP 8080-8085.
@@ -232,15 +235,39 @@ step_brain() {
 # --- 3. .env -----------------------------------------------------------------------------------------------------
 dotenv_get() { sed -n "s/^$1=//p" "$DOTENV" | tail -n 1; }
 
+# The settings M4 (RJ 466) needs, with the value a missing one gets. Keys are made fresh: no join token or lobby key
+# exists before M4, so a new one invalidates nothing.
+m4_value() {
+  case "$1" in
+    INTERNAL_PORT) echo "$INTERNAL_PORT" ;;
+    SERVERS_DIR) echo "$ENV_DIR/servers" ;;
+    GAME_HOST) echo "play.$DOMAIN" ;;
+    JOIN_KEY|LOBBY_MASTER_KEY) openssl rand -hex 32 ;;
+  esac
+}
+M4_KEYS="INTERNAL_PORT SERVERS_DIR GAME_HOST JOIN_KEY LOBBY_MASTER_KEY"
+
 step_dotenv() {
   if [ -f "$DOTENV" ]; then
-    local e
+    local e k missing=()
     e="$(dotenv_get ENV)"
     [ "$e" = "$ENV_NAME" ] || die "$DOTENV says ENV=$e, not $ENV_NAME; fix it by hand"
     if [ -z "$(find "$DOTENV" -perm 600)" ]; then
       if [ "$APPLY" = 1 ]; then chmod 600 "$DOTENV"; say "chmod 600 $DOTENV"; else plan "chmod 600 $DOTENV"; fi
     fi
-    say "$DOTENV exists; left as it is (keys unchanged)"
+    for k in $M4_KEYS; do [ -n "$(dotenv_get "$k")" ] || missing+=("$k"); done
+    if [ "${#missing[@]}" = 0 ]; then
+      say "$DOTENV exists and has every M4 setting; left as it is (keys unchanged)"
+      return
+    fi
+    if [ "$APPLY" = 0 ]; then
+      plan "append to $DOTENV the M4 settings it lacks: ${missing[*]} (keys made fresh; existing lines unchanged)"
+      return
+    fi
+    { echo "# Added by infra/box/provision.sh (RJ 466, M4) on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+      for k in "${missing[@]}"; do echo "$k=$(m4_value "$k")"; done; } >>"$DOTENV"
+    say "appended to $DOTENV: ${missing[*]}"
+    BRAIN_CHANGED=1
     return
   fi
   if [ "$APPLY" = 0 ]; then
@@ -258,9 +285,8 @@ PUBLIC_PORT=$PUBLIC_PORT
 INTERNAL_PORT=$INTERNAL_PORT
 GAME_PORTS=$GAME_PORTS
 GAME_HOST=play.$DOMAIN
+# One server binary per wire protocol (M4): SERVERS_DIR/manifest.json names them; deploy_server.sh writes it.
 SERVERS_DIR=$ENV_DIR/servers
-# Until M4 routes per wire protocol, one binary. Nothing is deployed here yet: dev multiplayer starts with M4.
-SERVER_BINARY=$ENV_DIR/servers/server.x86_64
 CONFIG_URL=https://config.$DOMAIN/$ENV_NAME/client.v1.json
 
 MYSQL_HOST=127.0.0.1
@@ -425,9 +451,32 @@ EOF
 }
 
 # --- 6. checks ---------------------------------------------------------------------------------------------------
+# What the per-protocol manifest deploys (read only; M4). Never fails the run: no server deployed is a valid state
+# (every join answers SERVER_BEHIND), not a broken box.
+report_manifest() {
+  local m="$ENV_DIR/servers/manifest.json"
+  if [ ! -f "$m" ]; then
+    say "WARNING: no $m: no game server is deployed, so every /v1/match/join answers SERVER_BEHIND (deploy_server.sh --env $ENV_NAME)"
+    return
+  fi
+  # shellcheck disable=SC2016 # the single quotes hold a node program, not shell expansions
+  node -e '
+    const fs = require("fs"); const path = require("path");
+    const dir = process.argv[2]; let doc;
+    try { doc = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8")); }
+    catch (e) { console.log("  WARNING: manifest.json does not parse: " + e.message); process.exit(0); }
+    for (const s of (doc && Array.isArray(doc.servers)) ? doc.servers : []) {
+      const bin = path.resolve(dir, String(s.path || ""));
+      let state = "missing";
+      try { fs.accessSync(bin, fs.constants.X_OK); state = "ok"; } catch (e) {}
+      console.log(`  wire ${s.wire} fp ${s.fp} ${s.status} ${s.sha || ""} ${s.path} (${state})`);
+    }' "$ENV_DIR/servers" | sed "s/^/[provision $ENV_NAME] /"
+}
+
 step_verify() {
   if [ "$APPLY" = 0 ]; then
-    plan "check http://127.0.0.1:$PUBLIC_PORT/ and https://$API_HOST/"
+    plan "check http://127.0.0.1:$PUBLIC_PORT/, the internal listener on 127.0.0.1:$INTERNAL_PORT, and https://$API_HOST/"
+    report_manifest
     return
   fi
   local ok=0
@@ -448,6 +497,13 @@ step_verify() {
   else
     say "WARNING: GET /v1/stats/columns did not answer ok; check pm2 logs $APP (SESSION_KEY and CONFIG_URL in .env)"
   fi
+  # The internal API (M4): on loopback only, and it refuses a call without a lobby key in the envelope.
+  if curl -sS "http://127.0.0.1:$INTERNAL_PORT/internal/v1/users/0/accolades" | grep -q '"code":"AUTH_REQUIRED"'; then
+    say "PASS the internal API answers on 127.0.0.1:$INTERNAL_PORT and refuses a call without a lobby key"
+  else
+    say "WARNING: the internal API on 127.0.0.1:$INTERNAL_PORT did not answer AUTH_REQUIRED; check pm2 logs $APP"
+  fi
+  report_manifest
   ok=0
   for _ in $(seq 1 30); do
     curl -fsS -o /dev/null "https://$API_HOST/" && { ok=1; break; }

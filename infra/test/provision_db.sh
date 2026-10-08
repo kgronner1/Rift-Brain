@@ -5,8 +5,8 @@
 #   bash infra/test/provision_db.sh
 #
 # Grades: PLAN changes nothing; dev is a dump-and-load copy, baselined and migrated, with its own user granted on
-# it alone; rift_brain is untouched; a second --apply changes nothing; --recopy-db starts dev over; alpha is built
-# fresh. Needs Docker; the container (rj-provision-test-<pid>) is removed on every exit path.
+# it alone; rift_brain is untouched; a second --apply changes nothing; an .env from before M4 gains only the settings
+# it lacks; --recopy-db starts dev over; alpha is built fresh. Needs Docker; the container (rj-provision-test-<pid>) is removed on every exit path.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -105,6 +105,27 @@ grep -q 'already holds a copy; not copied again' "$WORK/apply2.log" || { cat "$W
 grep -q 'rift_brain_dev is up to date' "$WORK/apply2.log" || { cat "$WORK/apply2.log"; fail "re-apply migrated"; }
 [ "$(shasum <"$ENVF")" = "$KEYS_BEFORE" ] || fail "re-apply rewrote .env"
 pass "a second --apply changes nothing (.env kept, no copy, migrations up to date)"
+
+# --- dev, an .env from before M4 (RJ 466): only the missing settings are appended --------------------------------
+grep -vE '^(JOIN_KEY|LOBBY_MASTER_KEY|INTERNAL_PORT)=' "$ENVF" >"$WORK/old.env"
+cp "$WORK/old.env" "$ENVF"
+OLD_SUM="$(shasum <"$ENVF")"
+provision --env dev >"$WORK/plan-m4.log" 2>&1 || { cat "$WORK/plan-m4.log"; fail "plan over an old .env"; }
+grep -q 'PLAN: append to .* the M4 settings it lacks: INTERNAL_PORT JOIN_KEY LOBBY_MASTER_KEY' "$WORK/plan-m4.log" \
+  || { cat "$WORK/plan-m4.log"; fail "plan does not name the M4 settings to append"; }
+[ "$(shasum <"$ENVF")" = "$OLD_SUM" ] || fail "plan changed an old .env"
+provision --env dev --apply >"$WORK/apply-m4.log" 2>&1 || { cat "$WORK/apply-m4.log"; fail "apply over an old .env"; }
+[ "$(head -n "$(wc -l <"$WORK/old.env")" "$ENVF" | shasum)" = "$OLD_SUM" ] || fail "an existing .env line changed"
+grep -qx 'INTERNAL_PORT=3101' "$ENVF" || fail "INTERNAL_PORT was not appended"
+for k in JOIN_KEY LOBBY_MASTER_KEY; do
+  grep -qE "^$k=[0-9a-f]{64}\$" "$ENVF" || fail "$k was not appended"
+done
+(cd "$WORK/rj/dev/brain" && node -e "require('dotenv').config(); require('./src/config/env').loadEnv(process.env)") \
+  || fail "the appended .env does not pass loadEnv"
+KEYS_BEFORE="$(shasum <"$ENVF")"
+provision --env dev --apply >"$WORK/apply-m4b.log" 2>&1 || { cat "$WORK/apply-m4b.log"; fail "re-apply after the M4 append"; }
+[ "$(shasum <"$ENVF")" = "$KEYS_BEFORE" ] || fail "a second apply appended again"
+pass "an .env from before M4: PLAN names what it lacks and changes nothing; --apply appends only that; then nothing"
 
 # --- dev, --recopy-db --------------------------------------------------------------------------------------------
 sql rift_brain -e "INSERT INTO users (username, email, password, access_token) VALUES ('cat','cat@x.test','h3','t3')"

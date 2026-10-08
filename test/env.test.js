@@ -30,14 +30,19 @@ test('ENV unset is the legacy brain, with the values the code hardcoded before',
 
 test('a new environment spells out its ports and binds loopback by default', () => {
   assert.deepEqual(problems({ ...MYSQL, ENV: 'dev' }).sort(), [
+    'GAME_HOST is required when ENV=dev',
     'GAME_PORTS is required when ENV=dev',
+    'INTERNAL_PORT is required when ENV=dev',
+    'JOIN_KEY is required when ENV=dev',
+    'LOBBY_MASTER_KEY is required when ENV=dev',
     'PUBLIC_PORT is required when ENV=dev',
-    'SERVER_BINARY is required when ENV=dev',
+    'SERVERS_DIR is required when ENV=dev',
     'SESSION_KEY is required when ENV=dev',
   ]);
   const env = loadEnv({
     ...MYSQL, ENV: 'dev', PUBLIC_PORT: '3001', INTERNAL_PORT: '3101', GAME_PORTS: '8100-8104',
-    SERVER_BINARY: '/opt/rj/dev/server.x86_64', SESSION_KEY: KEY.toUpperCase(),
+    SERVER_BINARY: '/opt/rj/dev/server.x86_64', SESSION_KEY: KEY.toUpperCase(), JOIN_KEY: 'cd'.repeat(32),
+    LOBBY_MASTER_KEY: 'ef'.repeat(32), GAME_HOST: 'play.example.com', SERVERS_DIR: '/opt/rj/dev/servers/',
     CONFIG_URL: 'https://config.example.com/dev/client.v1.json',
   });
   assert.equal(env.BIND_HOST, '127.0.0.1');
@@ -45,7 +50,19 @@ test('a new environment spells out its ports and binds loopback by default', () 
   assert.equal(env.INTERNAL_PORT, 3101);
   assert.deepEqual([...env.GAME_PORTS], [8100, 8101, 8102, 8103, 8104]);
   assert.equal(env.SESSION_KEY, KEY);
+  assert.equal(env.SERVERS_DIR, '/opt/rj/dev/servers');
+  assert.equal(env.SERVER_BINARY, null, 'a new environment runs binaries from the manifest, never SERVER_BINARY');
+  assert.equal(env.SERVER_LOGS_DIR, null);
   assert.ok(Object.isFrozen(env));
+});
+
+test('M4: the three keys must differ, and SERVERS_DIR is absolute', () => {
+  const text = problems({
+    ...MYSQL, ENV: 'dev', PUBLIC_PORT: '3001', INTERNAL_PORT: '3101', GAME_PORTS: '8100', GAME_HOST: 'h',
+    SESSION_KEY: KEY, JOIN_KEY: KEY, LOBBY_MASTER_KEY: 'ef'.repeat(32), SERVERS_DIR: 'servers',
+  }).join('\n');
+  assert.ok(text.includes('must be different keys'), text);
+  assert.ok(text.includes('SERVERS_DIR must be an absolute path'), text);
 });
 
 test('port lists take ranges and singles, in order', () => {

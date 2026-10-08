@@ -42,7 +42,11 @@ Must be done in Rift-Brain folder for .env reasons
 src/app.js              bootstrap: env, database, lobby registry, listeners
 src/config/env.js       every setting, from .env, validated at boot (see .env.example)
 src/db.js               the MySQL pool
-src/match/lobbies.js    game instances and the join queue (in process memory)
+src/match/lobbies.js    the legacy brain's game instances and join queue (in process memory)
+src/match/registry.js   a new environment's lobbies, seats and lobby-wait queue, per wire protocol (RJ 466)
+src/match/manifest.js   SERVERS_DIR/manifest.json: which server binary serves which (wire, fp) (RJ 466)
+src/match/host.js       the box side: UDP port test, starting and stopping game servers (RJ 466)
+src/routes/internal/    the internal API, game server -> brain, on 127.0.0.1:INTERNAL_PORT (RJ 466)
 src/match/ports.js      which game port is free
 src/match/process.js    spawning and killing game server processes
 src/storage/            today's storage.js, split by table
@@ -53,7 +57,7 @@ src/config/remote.js    the brain's copy of its remote config document, read eve
 src/contract/           the /v1 envelope and the error code registry (RJ 465)
 src/middleware/         /v1's request id, client-header gates, session auth, rate limits, errors (RJ 465)
 src/auth/               tokens (sign/verify, the lobby key) and device credentials (RJ 465)
-src/routes/v1/          API v1, every route but /v1/match/join (M4) and /v1/queue (M6) (RJ 465)
+src/routes/v1/          API v1 (RJ 465); /v1/match/join and /v1/queue's lobby kind (RJ 466); admission is M6
 src/log.js              every log line, with tokens, credentials and passwords redacted (RJ 465)
 fixtures/               join_token_v1.txt and its builder: the client's cross-language token test (RJ 465)
 test/                   npm test (node --test); pure tests need no database
@@ -64,7 +68,9 @@ infra/                  CloudFormation, the box's provisioning, and their tests 
 
 With `ENV` unset the brain behaves exactly as before RJ 462 (port 3000 on every interface, UDP 8080-8085,
 the single server binary in /home/ec2-user), so the legacy box keeps its `.env` as it is. A new environment
-(`ENV=dev|alpha|prod`) must spell out `PUBLIC_PORT`, `GAME_PORTS` and `SERVER_BINARY`, and binds 127.0.0.1.
+(`ENV=dev|alpha|prod`) must spell out `PUBLIC_PORT`, `INTERNAL_PORT`, `GAME_PORTS`, `GAME_HOST`, `SERVERS_DIR` and
+its three keys, binds 127.0.0.1, and serves none of today's matchmaking routes (only `GET /` and
+`/server_health_check` of them): it matches through `/v1/match/join`.
 
 `npm test` runs every test. Database tests run only when `RJ_TEST_DB` is set.
 
@@ -159,3 +165,68 @@ docker rm -f rb-test-db
 The box runs Node 16: runtime code uses no global `fetch` (the config fetcher is `https.get`). Tests may use newer
 Node.
 
+
+## Matchmaking (RJ 466, spec M4)
+
+A new environment matches players through `POST /v1/match/join` and `/v1/queue/:ticket`, hands each a **join
+token** (spec 4.8, signed with `JOIN_KEY`, 60 s, one seat in one lobby), and runs **one server binary per wire
+protocol**. Game servers talk back on the **internal API**, `127.0.0.1:INTERNAL_PORT/internal/v1/*` (spec 4.11),
+authenticated by their **lobby key**, hex `HMAC-SHA256(LOBBY_MASTER_KEY, lobby_id)`.
+
+**The servers directory.** Wobble Planet's `deploy_server.sh --env dev|alpha` writes it; the brain only reads it,
+again on every join, so a deploy needs no brain restart:
+
+```
+<SERVERS_DIR>/                                   /opt/rj/dev/servers, /opt/rj/alpha/servers
+  manifest.json
+  wire-<N>-<fp>/server.x86_64                    one directory per (wire VERSION, FINGERPRINT); executable
+```
+
+```json
+{ "servers": [
+  { "wire": 17, "fp": "9f2c4e1a0b7d3c55", "path": "wire-17-9f2c4e1a0b7d3c55/server.x86_64",
+    "sha": "<the Wobble Planet commit>", "deployed_at": "2026-10-08T18:00:00Z", "status": "active" } ] }
+```
+
+- `wire` is a positive integer, `fp` 16 lower-case hex characters, `status` `active` or `retired`. `path` is
+  relative to `SERVERS_DIR` (an absolute path must lie inside it). `sha` and `deployed_at` are for people.
+- An entry the brain cannot use is skipped and logged (`[manifest]`); the others still serve. A missing or
+  unparseable manifest is "nothing deployed": every join answers `SERVER_BEHIND`.
+- Upload a binary as `server.x86_64.new` and `mv` it into place (running lobbies keep the old inode); write the
+  manifest to a temporary file in `SERVERS_DIR` and `mv` it over `manifest.json`.
+- `--retire N` sets `status: retired` on every entry of wire N; `--withdraw N` removes them (the binaries stay).
+
+**Routing** a client on `(X-RJ-Wire, X-RJ-Wire-Fp)`: below `gates.min_wire`, or any entry of that wire `retired` ->
+`UPDATE_REQUIRED` (scope multiplayer); an `active` entry for exactly that pair -> play, in lobbies of that pair only;
+anything else -> `SERVER_BEHIND`. A private code whose lobby runs another pair -> `LOBBY_WRONG_VERSION`.
+
+**A lobby** is spawned on the first port of `GAME_PORTS` that no lobby holds and that passes a UDP bind test, as
+`<binary> --port=<p> --lobby_id=<id> --net_env=<ENV> --brain_url=http://127.0.0.1:<INTERNAL_PORT> [--private_code=<c>]`,
+with `RJ_JOIN_KEY` and `RJ_LOBBY_KEY` in its environment (never argv), its working directory the binary's, and nothing
+else of the brain's environment but `PATH HOME USER LANG LC_ALL TMPDIR`. Its states come from its heartbeats
+(`BOOTING`, `PREGAME`, `INGAME`, `POSTGAME`); only `PREGAME` takes players. Capacity is seated humans + reservations +
+bots < 4. A join token's seat is reserved for 60 s; `player-joined` seats it, `player-left` frees it. A lobby with no
+heartbeat for 45 s is stopped; an empty one ends after `POSTGAME`, or after 120 s empty in `PREGAME` or `INGAME`.
+
+**The lobby-wait queue** is the `lobby` kind of spec 4.2's `queued`: FIFO, `poll_after_ms` 3000 ± 20% (1000 ± 20%
+while the lobby boots or the brain is adopting), `expires_in_sec` 60 (each poll renews it), capped at
+`server.lobby_queue_max` (beyond it, `NO_CAPACITY`; a player waiting on a lobby that is booting is not counted).
+`create_private` always answers `queued` while its lobby boots; the poll that finds it ready answers as the join's ok.
+
+**A brain restart** loses nothing that matters: pm2 runs it with `treekill: false`, so its game servers keep running.
+For 30 s it spawns nothing and every join answers `queued`; meanwhile each lobby's next heartbeat (every 15 s) verifies
+under its derived key and the brain adopts it, seats included. After 30 s it stops any of its own servers that never
+heartbeated: a process carrying `--lobby_id=` that runs a binary under `SERVERS_DIR` or names this brain's
+`--brain_url`. Nothing else on the box is ever signalled.
+
+**The internal API's answers** are the 4.2 envelope. A missing or wrong lobby key is `AUTH_REQUIRED` (401).
+`heartbeat`, `player-joined` and `player-left` answer `{}`; `player-joined` for a seat that is not that player's is
+`VALIDATION` (409), and any call but a heartbeat from a lobby the brain does not know is `LOBBY_NOT_FOUND` (send a
+heartbeat). `match/results` takes today's array and answers `{players, ignored_user_ids}`: `players` is today's
+`data` (each player's new all-time stats), for the players who took a seat in this lobby; the rest are ignored.
+`match/accolades` answers `{user_accolades, ignored_keys}`, or `VALIDATION` (403) for a player with no seat.
+
+**Tests.** `test/manifest.test.js`, `test/match_registry.test.js`, `test/match_http.test.js` (every
+`/v1/match/join` outcome), `test/internal_http.test.js` (the lobby key, adoption after a restart, the seat checks)
+and `test/match_host.test.js` (a real spawn and UDP test) need no database; `test/internal.db.test.js` writes match
+results against one.

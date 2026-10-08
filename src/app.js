@@ -12,7 +12,11 @@ const { createRemoteConfig } = require('./config/remote');
 const { createV1Router } = require('./routes/v1');
 const { initDB, connectDB } = require('./db');
 const { createLobbyRegistry } = require('./match/lobbies');
-const { registerLobbyRoutes } = require('./routes/legacy/lobby');
+const { createMatchRegistry, brainUrlFor } = require('./match/registry');
+const { createManifestReader } = require('./match/manifest');
+const { createHost } = require('./match/host');
+const { registerLobbyRoutes, registerProbeRoutes } = require('./routes/legacy/lobby');
+const { createInternalRouter } = require('./routes/internal');
 const { registerStorageRoutes } = require('./routes/legacy/storage');
 
 // Ensure fatal errors have a dedicated log file outside stdout/stderr.
@@ -32,7 +36,10 @@ function logFatalError(err, context) {
 }
 
 // The public app: /v1 (RJ 465) when `v1` is given, and today's routes, unchanged. Takes the registry so tests can
-// drive it without a database. v1: {env, remote, now?} (routes/v1/index.js).
+// drive it without a database. v1: {env, remote, now?, match?} (routes/v1/index.js).
+// lobbies: the legacy registry (match/lobbies.js), whose matchmaking routes only the legacy brain serves; null in a new
+// environment, which matches through /v1/match/join (M4) and keeps only the two probes (GET / and
+// /server_health_check) of today's lobby routes.
 function createPublicApp(lobbies, { v1 } = {}) {
   const app = express();
   // Caddy on the same box is the only proxy: req.ip is the client's address behind it (spec 4.9).
@@ -42,7 +49,8 @@ function createPublicApp(lobbies, { v1 } = {}) {
   // Keep request logging minimal and low overhead; through log.js, like every other line.
   app.use(morgan('tiny', { stream: log.stream }));
 
-  registerLobbyRoutes(app, lobbies);
+  if (lobbies) registerLobbyRoutes(app, lobbies);
+  else registerProbeRoutes(app);
   registerStorageRoutes(app);
 
   // Treat unexpected route errors as fatal and return a safe 500 response.
@@ -54,11 +62,10 @@ function createPublicApp(lobbies, { v1 } = {}) {
   return app;
 }
 
-// The internal app (game server -> brain, 127.0.0.1 only). Its routes arrive in M4; until then today's
-// game servers still call the legacy routes on the public listener.
-function createInternalApp() {
+// The internal app (game server -> brain, 127.0.0.1 only; spec 4.11). internal: {env, match, config?, store?}.
+function createInternalApp(internal) {
   const app = express();
-  app.use(express.json());
+  if (internal) app.use('/internal/v1', createInternalRouter(internal));
   return app;
 }
 
@@ -101,21 +108,29 @@ async function main() {
   initDB(env.MYSQL);
   await connectDB();
 
-  const lobbies = createLobbyRegistry({ ports: env.GAME_PORTS, serverBinary: env.SERVER_BINARY });
-  lobbies.start();
-
-  // A new environment serves /v1 with its remote config's gates; the legacy brain serves today's routes only.
-  let v1 = null;
-  if (env.ENV !== 'legacy') {
-    const remote = createRemoteConfig({ env: env.ENV, url: env.CONFIG_URL });
-    await remote.start();
-    v1 = { env, remote };
+  // The legacy brain: today's routes and registry, unchanged.
+  if (env.ENV === 'legacy') {
+    const lobbies = createLobbyRegistry({ ports: env.GAME_PORTS, serverBinary: env.SERVER_BINARY });
+    lobbies.start();
+    await listen(createPublicApp(lobbies), env.PUBLIC_PORT, env.BIND_HOST, 'public');
+    if (env.INTERNAL_PORT !== null) await listen(createInternalApp(null), env.INTERNAL_PORT, '127.0.0.1', 'internal');
+    return;
   }
 
-  await listen(createPublicApp(lobbies, { v1 }), env.PUBLIC_PORT, env.BIND_HOST, 'public');
-  if (env.INTERNAL_PORT !== null) {
-    await listen(createInternalApp(), env.INTERNAL_PORT, '127.0.0.1', 'internal');
-  }
+  // A new environment: /v1 with its remote config's gates, and matchmaking per wire protocol (M4).
+  const remote = createRemoteConfig({ env: env.ENV, url: env.CONFIG_URL });
+  await remote.start();
+  const config = () => remote.current();
+  const match = createMatchRegistry({
+    env,
+    manifest: createManifestReader(env.SERVERS_DIR),
+    host: createHost({ serversDir: env.SERVERS_DIR, brainUrl: brainUrlFor(env), logDir: env.SERVER_LOGS_DIR }),
+    config,
+  });
+  // The internal listener first: lobbies that outlived the last brain heartbeat into it from the first moment.
+  await listen(createInternalApp({ env, match, config }), env.INTERNAL_PORT, '127.0.0.1', 'internal');
+  match.start();
+  await listen(createPublicApp(null, { v1: { env, remote, match } }), env.PUBLIC_PORT, env.BIND_HOST, 'public');
 }
 
 if (require.main === module) {
