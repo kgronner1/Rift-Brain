@@ -529,7 +529,7 @@ function createMatchRegistry({
         return err('VALIDATION', { message: 'That port belongs to another lobby.', status: 409 });
       }
       const code = normalizeCode(b.private_code);
-      lobby = newLobby({ id: lobbyId, wire: b.wire, fp: b.fp, port: b.port, adopted: true, privateCode: CODE_RE.test(code) ? code : '' });
+      lobby = newLobby({ id: lobbyId, wire: b.wire, fp: b.fp, port: b.port, state: b.state, adopted: true, privateCode: CODE_RE.test(code) ? code : '' });
       lobbies.set(lobbyId, lobby);
       logger.info(`[match] lobby ${lobbyId} adopted: wire ${b.wire} fp ${b.fp} UDP ${b.port} ${b.state}, ${b.players.length} players`);
     } else if (lobby.port !== b.port || lobby.wire !== b.wire || lobby.fp !== b.fp) {
