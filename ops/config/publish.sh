@@ -73,8 +73,10 @@ elif [ ! -f "$WP_DIR/$CHECK_GD" ]; then
   die "$WP_DIR/$CHECK_GD does not exist. It is M2's (the client's remote config parser); until it lands, re-run with --skip-client-check. Set RJ_WOBBLE_PLANET if the checkout is elsewhere."
 else
   CHECK_LOG="$WORK/check_remote_config.log"
-  # A subshell: _common.sh installs traps and job state of its own.
+  # A subshell: _common.sh installs traps and job state of its own. The harness runs without set -e (smoke.sh is
+  # set -uo pipefail): under -e, a non-zero status inside its EXIT trap's cleanup replaced the checker's own 0.
   if ! (
+    set +e
     # shellcheck source=/dev/null
     . "$WP_DIR/Tools/harness/_common.sh"
     harness_spawn_godot check_remote_config "$CHECK_LOG" 120 --headless --path "$WP_DIR" --net_env=offline \
