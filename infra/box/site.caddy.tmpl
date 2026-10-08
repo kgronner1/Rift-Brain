@@ -1,0 +1,14 @@
+# Written by Rift-Brain infra/box/provision.sh (RJ 463) for @ENV@; a re-run overwrites it. Edit the template instead.
+@HOST@ {
+	encode zstd gzip
+
+	reverse_proxy @UPSTREAM@
+
+	# Caddy's own failures (the brain is down or restarting: 502, 504) answer as the API would, in the response
+	# envelope (spec 4.2), with retry: backoff. A response the brain itself sends passes through untouched.
+	handle_errors 502 503 504 {
+		header Content-Type application/json
+		header X-RJ-Ref {http.request.uuid}
+		respond `\{"result":"error","error":\{"code":"NET_UNREACHABLE","message":"Can't reach the Rift Jumpers servers right now. Check your connection and try again.","retry":\{"kind":"backoff"\},"scope":"request","action":\{"kind":"dismiss"\},"ref":"{http.request.uuid}"\}\}` 503
+	}
+}

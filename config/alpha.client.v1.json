@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "env": "alpha",
+  "serial": 0,
+  "published_at": "1970-01-01T00:00:00Z",
+  "ttl_sec": 300,
+  "endpoints": { "api": "https://api.riftjumpers.space" },
+  "gates": {
+    "min_build": { "default": 0, "android": 0, "ios": 0 },
+    "min_build_multiplayer": { "default": 0, "android": 0, "ios": 0 },
+    "min_wire": 1,
+    "maintenance": { "active": false, "scope": "multiplayer", "title": "", "message": "", "ends_at": null }
+  },
+  "notice": { "id": "", "level": "info", "message": "", "url": "", "dismissible": true },
+  "tunables": {
+    "http_timeout_ms": 5000,
+    "config_fetch_timeout_ms": 3000,
+    "backoff": { "base_ms": 1000, "cap_ms": 60000 },
+    "session_restore_max_attempts": 6,
+    "queue_poll_default_ms": 5000,
+    "join_connect_timeout_ms": 3000,
+    "handshake_timeout_ms": 5000
+  },
+  "flags": { "multiplayer": true, "quickplay": true, "private_lobbies": true, "account_creation": true },
+  "links": { "store": { "android": "", "ios": "" }, "support": "" },
+  "messages": {},
+  "server": {
+    "admission": {
+      "enabled": false,
+      "rate_per_min": 600,
+      "burst": 50,
+      "grant_ttl_sec": 120,
+      "ticket_ttl_sec": 600,
+      "session_refresh_grace_sec": 86400
+    },
+    "lobby_queue_max": 200,
+    "rate_limits": { "login_per_min_ip": 10, "login_per_min_account": 5, "restore_per_min_credential": 30 }
+  }
+}
