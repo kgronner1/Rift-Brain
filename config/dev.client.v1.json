@@ -21,7 +21,7 @@
     "join_connect_timeout_ms": 3000,
     "handshake_timeout_ms": 5000
   },
-  "flags": { "multiplayer": false, "quickplay": true, "private_lobbies": true, "account_creation": true },
+  "flags": { "multiplayer": true, "quickplay": true, "private_lobbies": true, "account_creation": true },
   "links": { "store": { "android": "", "ios": "" }, "support": "" },
   "messages": {},
   "server": {
