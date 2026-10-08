@@ -1,6 +1,7 @@
 // Today's matchmaking and lobby-lifecycle routes, unchanged in path and shape.
 // /v1/match/join and /internal/v1/* replace them in M4; these go at cutover.
 
+const log = require('../../log');
 const { MAX_PLAYERS } = require('../../match/lobbies');
 
 function registerLobbyRoutes(app, lobbies) {
@@ -53,7 +54,7 @@ function registerLobbyRoutes(app, lobbies) {
     }
     else if (player_submitted_private_code) {
       // search our object of game instances to find the port (key) of the game instance that matches the code
-      console.log("player_submitted_private_code:", player_submitted_private_code, game_instances);
+      log.info("player_submitted_private_code:", player_submitted_private_code, game_instances);
 
       const check = lobbies.checkForJoinablePrivateGame(player_submitted_private_code);
       game_port = check.game_port;
@@ -62,7 +63,7 @@ function registerLobbyRoutes(app, lobbies) {
       }
     }
     else {
-      console.log("no_private_code, dont create a private game");
+      log.info("no_private_code, dont create a private game");
       // find all healthy games
       // avaiable = lobby in PREGAME, not private game, less than 4 players
       // (seats reserved for admitted-but-unconnected queue tickets count as taken)
@@ -72,7 +73,7 @@ function registerLobbyRoutes(app, lobbies) {
         }
         return i;
       }, {});
-      console.log("healthy_games", healthy_games);
+      log.info("healthy_games", healthy_games);
 
       // if we dont have any healthy games, create a game, or queue the player if we have no room
       if (!Object.keys(healthy_games).length) {
@@ -99,7 +100,7 @@ function registerLobbyRoutes(app, lobbies) {
       else {
         // if we dont have a game with players yet, pick the first one from the healthy list
         game = Object.keys(healthy_games)[0];
-        console.log("game:", game);
+        log.info("game:", game);
         if (game) {
           game_port = game;
         }
@@ -110,7 +111,7 @@ function registerLobbyRoutes(app, lobbies) {
     // put the new game port in the object before sending it
     response["game_port"] = game_port;
 
-    console.log("response: ", response);
+    log.info("response: ", response);
 
     // send the response
     res.status(200).send(JSON.stringify(response));
@@ -130,8 +131,8 @@ function registerLobbyRoutes(app, lobbies) {
     // what game instance is this? this must be passed as a query
     let passed_game_instance = req.query.game_instance;
 
-    console.log("HEALTHY CHECK hit: ", passed_game_instance);
-    console.log("All game instances: ", game_instances);
+    log.info("HEALTHY CHECK hit: ", passed_game_instance);
+    log.info("All game instances: ", game_instances);
 
     if (passed_game_instance && game_instances.hasOwnProperty(passed_game_instance)) {
       // reset the health timer by starting it again
@@ -139,11 +140,11 @@ function registerLobbyRoutes(app, lobbies) {
     }
     else if (passed_game_instance) {
       // kill the process on that port and delete the game_instance object
-      console.log("ending game instance call from /health_check");
+      log.info("ending game instance call from /health_check");
       lobbies.endGameInstance(passed_game_instance);
     }
     else {
-      console.log("FAILED TO PASS GAME INSTANCE");
+      log.info("FAILED TO PASS GAME INSTANCE");
     }
 
     res.status(200).json({ success: true });
@@ -157,7 +158,7 @@ function registerLobbyRoutes(app, lobbies) {
   app.get('/player_left_instance', function (req, res) {
     const game_instances = lobbies.game_instances;
 
-    console.log("pre-player left: ");
+    log.info("pre-player left: ");
 
     // what game instance is this? this must be passed as a query
     let passed_game_instance = req.query.game_instance;
@@ -165,7 +166,7 @@ function registerLobbyRoutes(app, lobbies) {
     if (passed_game_instance && game_instances.hasOwnProperty(passed_game_instance)) {
       if (game_instances[passed_game_instance]["players"] > 1) {
         // remove a player from the count
-        console.log("minus one player");
+        log.info("minus one player");
         game_instances[passed_game_instance]["players"]--;
 
         // a seat may have opened in a joinable lobby
@@ -174,12 +175,12 @@ function registerLobbyRoutes(app, lobbies) {
         }
       }
       else {
-        console.log("ending game instance call from player_left_instance");
+        log.info("ending game instance call from player_left_instance");
         lobbies.endGameInstance(passed_game_instance);
       }
     }
     else {
-      console.log("FAILED TO PASS GAME INSTANCE");
+      log.info("FAILED TO PASS GAME INSTANCE");
     }
 
     res.status(200).json({ success: true });
@@ -194,15 +195,15 @@ function registerLobbyRoutes(app, lobbies) {
     let passed_game_instance = req.query.game_instance;
 
     if (!passed_game_instance || !game_instances.hasOwnProperty(passed_game_instance)) {
-      console.log("FAILED TO PASS GAME INSTANCE");
+      log.info("FAILED TO PASS GAME INSTANCE");
       res.status(200).json({ success: false, message: 'unknown game_instance' });
       return;
     }
 
-    console.log("pre-player joined: ", game_instances[passed_game_instance]["players"]);
+    log.info("pre-player joined: ", game_instances[passed_game_instance]["players"]);
     // add a player
     game_instances[passed_game_instance]["players"]++;
-    console.log("post-player joined: ", game_instances[passed_game_instance]["players"]);
+    log.info("post-player joined: ", game_instances[passed_game_instance]["players"]);
 
     // The game server can't tell us WHICH joiner this was, so we approximate:
     // release the oldest outstanding reservation for this port. If the joiner was
@@ -213,7 +214,7 @@ function registerLobbyRoutes(app, lobbies) {
     const join_queue = lobbies.join_queue;
     const reservation_index = join_queue.findIndex((t) => t.admitted_port === port);
     if (reservation_index !== -1) {
-      console.log(`Consuming reservation ${join_queue[reservation_index].ticket_id} for port ${port}`);
+      log.info(`Consuming reservation ${join_queue[reservation_index].ticket_id} for port ${port}`);
       lobbies.removeTicketAt(reservation_index);
     }
 
@@ -231,7 +232,7 @@ function registerLobbyRoutes(app, lobbies) {
       res.status(200).json({ success: true });
     }
     else {
-      console.log("FAILED TO PASS GAME INSTANCE");
+      log.info("FAILED TO PASS GAME INSTANCE");
       res.status(200).json({ success: false, message: 'unknown game_instance' });
     }
 
@@ -248,7 +249,7 @@ function registerLobbyRoutes(app, lobbies) {
       res.status(200).json({ success: true });
     }
     else {
-      console.log("FAILED TO PASS GAME INSTANCE");
+      log.info("FAILED TO PASS GAME INSTANCE");
       res.status(200).json({ success: false, message: 'unknown game_instance' });
     }
 
@@ -266,7 +267,7 @@ function registerLobbyRoutes(app, lobbies) {
       res.status(200).json({ success: true });
     }
     else {
-      console.log("FAILED TO PASS GAME INSTANCE");
+      log.info("FAILED TO PASS GAME INSTANCE");
       res.status(200).json({ success: false, message: 'unknown game_instance' });
     }
 
@@ -330,7 +331,7 @@ function registerLobbyRoutes(app, lobbies) {
       res.status(200).json({ success: true });
     }
     else {
-      console.log("FAILED TO PASS GAME INSTANCE");
+      log.info("FAILED TO PASS GAME INSTANCE");
       res.status(200).json({ success: false, message: 'unknown game_instance' });
     }
 

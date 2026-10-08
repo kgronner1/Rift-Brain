@@ -1,6 +1,7 @@
 // The user_stats table: the post-match update (with ELO) and the single-player sync.
 const { getDB } = require('../db');
-const { loadUserStatsColumns } = require('./columns');
+const { loadUserStatsColumns, filterSpStatsKeys, quoteColumn } = require('./columns');
+const log = require('../log');
 const { ELO_DEFAULT_RATING, resolvePlacement, computeEloRatingChanges } = require('./elo');
 
 // user_stats
@@ -49,7 +50,7 @@ function prepareUpdatePlayerStatsStatement(updated_player_stats) {
   // if key begins with sp, continue
 
   const keys = Object.keys(updated_player_stats);
-  const fields = keys.map(key => `${key} = ?`).join(', ');
+  const fields = keys.map(key => `${quoteColumn(key)} = ?`).join(', ');
   const values = keys.map(key => updated_player_stats[key].value);
 
   let update_variables = {};
@@ -276,14 +277,14 @@ async function postMatchPlayerStatsUpdate(body) {
 
         } catch (error) {
 
-          console.error('Error updating player stats after match:', error.message);
+          log.error('Error updating player stats after match:', error.message);
           throw error;
 
         }
       }
 
     } catch (error) {
-        console.error('Error finding player from user_id when updating player stats after match:', error.message);
+        log.error('Error finding player from user_id when updating player stats after match:', error.message);
         throw error;
     }
 
@@ -293,14 +294,10 @@ async function postMatchPlayerStatsUpdate(body) {
 
 }
 
+// The single-player sync: when the client's _last_updated is newer than the row's, its sp_ and currency columns
+// replace the database's. Only keys filterSpStatsKeys() allows reach SQL; the rest come back in ignored_keys.
+// body: {user_id, stats: {KEY: VALUE, ..., _last_updated}}. Returns {user_id, user_stats, ignored_keys}.
 async function singlePlayerStatsSync(body) {
-
-  // expecting:
-  // {"user_id": user_id, "stats": {"KEY": VALUE, "KEY2": VALUE...}}
-
-  // this function checks if the updated_date in the body is more recent than the user's stats saved in the database
-  // if the updated_date is more recent, replace the single player stats in the database
-  // return the user's stats
 
   if (!body.user_id) {
     throw new Error('Missing required field: user_id');
@@ -308,45 +305,29 @@ async function singlePlayerStatsSync(body) {
 
   const db = getDB();
   const user_id = body.user_id;
+  const stats = body.stats && typeof body.stats === 'object' && !Array.isArray(body.stats) ? body.stats : {};
+  const { set: columns } = await loadUserStatsColumns();
+  const { keys: updateKeys, ignored: ignored_keys } = filterSpStatsKeys(stats, columns);
+  const lastUpdated = Number(stats._last_updated);
 
-  // if the client sent a _last_updated timestamp, check if local data is fresher
-  if (body.stats && body.stats._last_updated) {
-
+  if (Number.isFinite(lastUpdated) && lastUpdated > 0 && updateKeys.length > 0) {
     const [staleRows] = await db.execute(
       `SELECT user_id FROM user_stats WHERE user_id = ? AND UNIX_TIMESTAMP(_last_updated) < ?;`,
-      [user_id, body.stats._last_updated]
+      [user_id, lastUpdated]
     );
 
-    // if we have a result that means the local data is fresher, so let's update it
+    // A row older than the client's copy: the client's is fresher, so it wins.
     if (staleRows.length > 0) {
-
-      // collect all sp_ columns and currency columns from the incoming stats
-      const updateKeys = Object.keys(body.stats).filter(key =>
-        key.startsWith('sp_') || key === 'currency_amount' || key === 'currency_earned_alltime'
+      const fields = updateKeys.map(key => `${quoteColumn(key)} = ?`).join(', ');
+      const values = updateKeys.map(key => stats[key]);
+      values.push(user_id);
+      await db.execute(
+        `UPDATE user_stats SET ${fields}, _last_updated = NOW() WHERE user_id = ?;`,
+        values
       );
-
-      if (updateKeys.length > 0) {
-
-        const fields = updateKeys.map(key => `${key} = ?`).join(', ');
-        const values = updateKeys.map(key => body.stats[key]);
-
-        const queryUpdate = `
-          UPDATE user_stats
-          SET ${fields}, _last_updated = NOW()
-          WHERE user_id = ?;
-        `;
-
-        values.push(user_id);
-
-        await db.execute(queryUpdate, values);
-
-      }
-
     }
-
   }
 
-  // return the user's current stats
   const [rows] = await db.execute(
     `SELECT * FROM user_stats WHERE user_id = ?;`,
     [user_id]
@@ -356,14 +337,10 @@ async function singlePlayerStatsSync(body) {
     throw new Error('No matching user stats found.');
   }
 
-  // dont need to return update timestamp and user_id
   delete rows[0].user_id;
   delete rows[0]._last_updated;
-  // if (rows[0]._last_updated) {
-  //   rows[0]._last_updated = Math.floor(new Date(rows[0]._last_updated).getTime() / 1000);
-  // }
 
-  return {"user_id":user_id, "user_stats": rows[0]};
+  return { "user_id": user_id, "user_stats": rows[0], ignored_keys };
 
 }
 

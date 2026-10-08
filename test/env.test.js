@@ -33,6 +33,7 @@ test('a new environment spells out its ports and binds loopback by default', () 
     'GAME_PORTS is required when ENV=dev',
     'PUBLIC_PORT is required when ENV=dev',
     'SERVER_BINARY is required when ENV=dev',
+    'SESSION_KEY is required when ENV=dev',
   ]);
   const env = loadEnv({
     ...MYSQL, ENV: 'dev', PUBLIC_PORT: '3001', INTERNAL_PORT: '3101', GAME_PORTS: '8100-8104',

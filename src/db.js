@@ -1,5 +1,6 @@
 // db.js
 
+const log = require('./log');
 const mysql = require('mysql2/promise');
 
 let pool = null;
@@ -18,10 +19,10 @@ function initDB(mysqlConfig) {
 async function connectDB() {
   try {
     const connection = await getDB().getConnection();
-    console.log('Connected to MySQL (via pool)!');
+    log.info('Connected to MySQL (via pool)!');
     connection.release(); // release immediately after test
   } catch (err) {
-    console.error('Error connecting to MySQL:', err);
+    log.error('Error connecting to MySQL:', err);
     throw err;
   }
 }

@@ -128,6 +128,9 @@ function loadEnv(raw = process.env) {
     keys[name] = v.toLowerCase();
   }
 
+  // /v1 signs sessions with it (RJ 465): a new environment cannot serve without one.
+  if (!legacy && keys.SESSION_KEY === null) problems.push(`SESSION_KEY is required when ENV=${env}`);
+
   let configUrl = null;
   if (!isBlank(raw.CONFIG_URL)) {
     try {

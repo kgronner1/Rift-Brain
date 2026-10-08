@@ -1,3 +1,4 @@
+const log = require('../log');
 const crypto = require('crypto');
 const { firstFreePort } = require('./ports');
 const { runCommand: defaultRunCommand } = require('./process');
@@ -84,7 +85,7 @@ function createLobbyRegistry({
       if (admit_port !== null) {
         ticket.admitted_port = admit_port;
         ticket.admitted_at = now();
-        console.log(`Ticket ${ticket.ticket_id} admitted to game instance ${admit_port}`);
+        log.info(`Ticket ${ticket.ticket_id} admitted to game instance ${admit_port}`);
       }
     }
   }
@@ -104,7 +105,7 @@ function createLobbyRegistry({
       return true;
     });
     if (join_queue.length < num_tickets_before) {
-      console.log(`Queue sweep purged ${num_tickets_before - join_queue.length} ticket(s)`);
+      log.info(`Queue sweep purged ${num_tickets_before - join_queue.length} ticket(s)`);
     }
     drainJoinQueue();
   }
@@ -123,28 +124,28 @@ function createLobbyRegistry({
   }
 
   async function endGameInstance(game_port) {
-    console.log("BEFORE ENDGAME");
+    log.info("BEFORE ENDGAME");
 
     const pid = game_instances[game_port]?.pid;
     if (!pid) {
-      console.warn("No PID found for game port", game_port);
+      log.warn("No PID found for game port", game_port);
       return;
     }
 
     const command = `kill ${pid}`;
-    console.log("runEndCommand:", command);
+    log.info("runEndCommand:", command);
 
     try {
       await runCommand(command);
-      console.log(`Game instance ${game_port} (PID ${pid}) killed successfully.`);
+      log.info(`Game instance ${game_port} (PID ${pid}) killed successfully.`);
     } catch (err) {
-      console.error("Error killing process:", err.message);
+      log.error("Error killing process:", err.message);
     }
 
     // clear any timers
     if (game_instances[game_port]?.timer) {
       clearTimeout(game_instances[game_port].timer);
-      console.log("Removed timer for", game_port);
+      log.info("Removed timer for", game_port);
     }
 
     delete game_instances[game_port];
@@ -164,7 +165,7 @@ function createLobbyRegistry({
     const options = [`--port=${new_game_instance_port}`];
     if (private_code) options.push(`--private_code=${private_code}`);
 
-    console.log("Launching game:", command, options);
+    log.info("Launching game:", command, options);
 
     const pid = await runCommand(command, options);
 
@@ -181,12 +182,12 @@ function createLobbyRegistry({
       pid,
     };
 
-    console.log(`Game instance created on port ${new_game_instance_port} (pid ${pid})`);
+    log.info(`Game instance created on port ${new_game_instance_port} (pid ${pid})`);
 
     return watchProperty(game_instances[new_game_instance_port], "healthy", readyTimeoutMs, false)
       .then((healthyValue) => {
         startHealthCheckTimer(new_game_instance_port);
-        console.log("Healthy value:", healthyValue);
+        log.info("Healthy value:", healthyValue);
         return healthyValue ? new_game_instance_port : 1;
       });
   }
@@ -197,7 +198,7 @@ function createLobbyRegistry({
     // no game_port? its already ended
     if (!game_instances[game_port]) {
       // run kill instance for good measure
-      console.log("ending game instance call from startHealthCheclTimer no game_port in obj");
+      log.info("ending game instance call from startHealthCheclTimer no game_port in obj");
       endGameInstance(game_port);
       return;
     }
@@ -207,13 +208,13 @@ function createLobbyRegistry({
         clearTimeout(game_instances[game_port].timer);
     }
 
-    console.log(`Starting timer for game instance ${game_port}`);
+    log.info(`Starting timer for game instance ${game_port}`);
 
     // set a new timeout for const health time
     // the timer is reset when health check endpoint is hit
     game_instances[game_port].timer = setTimeout(() => {
         // if the timer goes off it triggers a shutdown from the linux side of the port game instance
-        console.log("ending game instance call from,"+game_port+" timer ran out");
+        log.info("ending game instance call from,"+game_port+" timer ran out");
         endGameInstance(game_port);
     }, healthTimeMs);
 
@@ -245,7 +246,7 @@ function createLobbyRegistry({
         return { game_port: 3 };
       }
 
-      console.log(game_port);
+      log.info(game_port);
       return { game_port: Number(game_port) };
 
   }
@@ -281,7 +282,7 @@ function watchProperty(obj, property, timeout, defaultValue) {
               return value;
           },
           set(newValue) {
-              console.log("set property: ", newValue);
+              log.info("set property: ", newValue);
               clearTimeout(propertyNotSetTimer);
               value = newValue;
               resolve(value); // Resolve the promise when the property changes.

@@ -1,0 +1,31 @@
+# Rift-Brain fixtures/join_token_v1.txt (RJ 465). Built by fixtures/build_join_token_v1.js; do not edit by hand.
+# Join tokens of spec 4.8, signed with a fixed, public fixture key at a fixed time.
+#
+# Format: one name=value per line; lines starting with # are comments; the value runs to the end of the line.
+# The token: base64url(payload_json) "." base64url(HMAC-SHA256(key, payload_part)), where
+#   - base64url is RFC 4648 section 5 with no "=" padding;
+#   - the HMAC key is the 32 bytes key_hex spells (decode the hex; it is not the 64 ASCII characters);
+#   - the HMAC message is the payload part as it appears in the token (its ASCII bytes);
+#   - iat and exp are whole seconds since the Unix epoch, and a token is expired once now >= exp.
+# A verifier checks, in order: two parts of base64url, the signature (constant time), typ, v, env, exp.
+#
+# Expected results, verifying at `now` with key_hex, typ "j" and env "dev":
+#   token          -> ok, and its payload equals payload_json (same keys and values)
+#   token_utf8     -> ok, and its uname is uname_utf8 (UTF-8 in the payload)
+#   token at expired_now      -> expired
+#   token_tampered -> signature (the payload changed, the signature did not)
+#   token_wrong_key -> signature
+#   token_session  -> typ (a session token, typ "s", signed with this key)
+#   token_other_env -> env
+format=1
+key_hex=c57745cb1a87f0da9fec36592c813fcc457ed6a92261bfc8a8d40ffb3e1f9963
+now=1790000010
+expired_now=1790000060
+token=eyJ2IjoxLCJ0eXAiOiJqIiwidWlkIjo0MjQyLCJ1bmFtZSI6IlBpbG90X09uZSIsImxvYmJ5IjoibG9iYnktZGV2LTgxMDAtN2MyYSIsIndpcmUiOjEsImZwIjoiOWYyYzRlMWEwYjdkM2M1NSIsImVudiI6ImRldiIsInNlYXQiOiJzLTNmOWExYzJlN2I1ZDRmNjAiLCJob3N0Ijp0cnVlLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDAwMDA2MCwianRpIjoiai0wMTIzNDU2Nzg5YWJjZGVmIn0.yjPK6byUYicQSqjEdUjA2dQiCz1fdnBkA5VUASa_iT0
+payload_json={"v":1,"typ":"j","uid":4242,"uname":"Pilot_One","lobby":"lobby-dev-8100-7c2a","wire":1,"fp":"9f2c4e1a0b7d3c55","env":"dev","seat":"s-3f9a1c2e7b5d4f60","host":true,"iat":1790000000,"exp":1790000060,"jti":"j-0123456789abcdef"}
+token_utf8=eyJ2IjoxLCJ0eXAiOiJqIiwidWlkIjo0MjQyLCJ1bmFtZSI6Ilpvw6sg4piFIiwibG9iYnkiOiJsb2JieS1kZXYtODEwMC03YzJhIiwid2lyZSI6MSwiZnAiOiI5ZjJjNGUxYTBiN2QzYzU1IiwiZW52IjoiZGV2Iiwic2VhdCI6InMtM2Y5YTFjMmU3YjVkNGY2MCIsImhvc3QiOnRydWUsImlhdCI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwMDYwLCJqdGkiOiJqLWZlZGNiYTk4NzY1NDMyMTAifQ.P6I2H7U_oFmNVKVnyTZTayZ-F7BVnVGwSRyNf6nv2bc
+uname_utf8=Zoë ★
+token_tampered=eyJ2IjoxLCJ0eXAiOiJqIiwidWlkIjo0MjQzLCJ1bmFtZSI6IlBpbG90X09uZSIsImxvYmJ5IjoibG9iYnktZGV2LTgxMDAtN2MyYSIsIndpcmUiOjEsImZwIjoiOWYyYzRlMWEwYjdkM2M1NSIsImVudiI6ImRldiIsInNlYXQiOiJzLTNmOWExYzJlN2I1ZDRmNjAiLCJob3N0Ijp0cnVlLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDAwMDA2MCwianRpIjoiai0wMTIzNDU2Nzg5YWJjZGVmIn0.yjPK6byUYicQSqjEdUjA2dQiCz1fdnBkA5VUASa_iT0
+token_wrong_key=eyJ2IjoxLCJ0eXAiOiJqIiwidWlkIjo0MjQyLCJ1bmFtZSI6IlBpbG90X09uZSIsImxvYmJ5IjoibG9iYnktZGV2LTgxMDAtN2MyYSIsIndpcmUiOjEsImZwIjoiOWYyYzRlMWEwYjdkM2M1NSIsImVudiI6ImRldiIsInNlYXQiOiJzLTNmOWExYzJlN2I1ZDRmNjAiLCJob3N0Ijp0cnVlLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDAwMDA2MCwianRpIjoiai0wMTIzNDU2Nzg5YWJjZGVmIn0.rcF4oLBBF5rzjnZGLn-EbIJuBaJ_A51v8ynTTHDunYY
+token_session=eyJ2IjoxLCJ0eXAiOiJzIiwidWlkIjo0MjQyLCJlbnYiOiJkZXYiLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDAwMzYwMH0.wyVUXt2MNrfJvdiCKkpcyNpO4rv9MiEayWqU8Z9GJoo
+token_other_env=eyJ2IjoxLCJ0eXAiOiJqIiwidWlkIjo0MjQyLCJ1bmFtZSI6IlBpbG90X09uZSIsImxvYmJ5IjoibG9iYnktZGV2LTgxMDAtN2MyYSIsIndpcmUiOjEsImZwIjoiOWYyYzRlMWEwYjdkM2M1NSIsImVudiI6ImFscGhhIiwic2VhdCI6InMtM2Y5YTFjMmU3YjVkNGY2MCIsImhvc3QiOnRydWUsImlhdCI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwMDAwMDYwLCJqdGkiOiJqLTAxMjM0NTY3ODlhYmNkZWYifQ.AgLzbV_KOPMQup61u3wwdzfo2U4ylQatXqs8sCB0wp8

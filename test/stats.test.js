@@ -60,7 +60,7 @@ test('a match folds into the all-time stats', () => {
   assert.equal(out.num_unique_planets_visited_alltime.value, 7);
 
   const stmt = prepareUpdatePlayerStatsStatement({ a: { value: 1 }, b: { value: 2 } });
-  assert.deepEqual(stmt, { fields: 'a = ?, b = ?', values: [1, 2] });
+  assert.deepEqual(stmt, { fields: '`a` = ?, `b` = ?', values: [1, 2] }, 'column names are backtick-quoted (RJ 465)');
 });
 
 test('column labels read as before', () => {
