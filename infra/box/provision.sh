@@ -106,7 +106,7 @@ step_preflight() {
   # Anything already on the ports this environment needs, that is not ours.
   local busy
   for p in 80 443 "$PUBLIC_PORT" "$INTERNAL_PORT"; do
-    busy="$(sudo ss -ltnpH "sport = :$p" 2>/dev/null | grep -o 'users:(("[^"]*"' | cut -d'"' -f2 | sort -u | tr '\n' ' ')"
+    busy="$(sudo ss -ltnpH "sport = :$p" 2>/dev/null | grep -o 'users:(("[^"]*"' | cut -d'"' -f2 | sort -u | tr '\n' ' ' || true)"
     [ -z "$busy" ] && continue
     case "$p:$busy" in
       80:caddy*|443:caddy*) ;;
