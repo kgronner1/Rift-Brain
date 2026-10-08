@@ -220,6 +220,14 @@ test('the accolade sync writes known accolades, stamps first earns, and ignores 
   assert.equal('OtherDbOnly' in r.body.data.user_accolades, false, 'another database\'s columns stay out (TABLE_SCHEMA)');
 });
 
+test('user 0 reads the global earn rates, as the logged-out gallery and the game server expect', { skip }, async () => {
+  const r = await call('GET', '/v1/users/0/accolades');
+  assert.equal(code(r), 'ok');
+  assert.equal(r.body.data.Ghost.earned, 0);
+  assert.ok('earnRate' in r.body.data.Ghost);
+  assert.equal(code(await call('GET', '/v1/users/-1/accolades')), 'VALIDATION');
+});
+
 test('the player card equips an earned accolade, nothing for an unearned one, and reads back publicly', { skip }, async () => {
   assert.deepEqual((await call('PUT', '/v1/me/player-card', { token: ctx.one.session, body: { equipped_accolade_key: 'Ghost' } })).body,
     { result: 'ok', data: { equipped_accolade_key: 'Ghost' } });

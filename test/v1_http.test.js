@@ -210,7 +210,7 @@ test('input checks answer VALIDATION before any database work', async (t) => {
   assert.equal(code(await call('POST', '/v1/session', { body: { login: { id: 'a', password: 5 } } })), 'VALIDATION');
   assert.equal(code(await call('POST', '/v1/session', { body: { credential: { user_id: 'x', token: 't' } } })), 'VALIDATION');
   assert.equal(code(await call('GET', '/v1/users/abc/stats')), 'VALIDATION');
-  assert.equal(code(await call('GET', '/v1/users/0/accolades')), 'VALIDATION');
+  assert.equal(code(await call('GET', '/v1/users/00/accolades')), 'VALIDATION');
   assert.equal(code(await call('POST', '/v1/accounts', { body: { username: 'u'.repeat(65), email: 'a@b.co', password: 'p' } })), 'VALIDATION');
 });
 

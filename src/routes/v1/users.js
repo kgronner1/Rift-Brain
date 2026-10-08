@@ -48,8 +48,9 @@ function registerUserRoutes(router) {
     sendOk(res, rows[0]);
   }));
 
+  // User 0 is "nobody": the client's gallery and the game server ask for it to get only the global earn rates.
   router.get('/users/:id/accolades', route(async (req, res) => {
-    const userId = requireUserId(req.params.id);
+    const userId = req.params.id === '0' ? 0 : requireUserId(req.params.id);
     sendOk(res, await getUserAccolades(userId));
   }));
 
