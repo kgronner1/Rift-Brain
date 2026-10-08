@@ -1,6 +1,6 @@
 // The user_player_card table.
 const { getDB } = require('../db');
-const { isValidAccoladeKey } = require('./columns');
+const { isValidAccoladeKey, quoteColumn } = require('./columns');
 
 async function getPlayerCard(user_id) {
   const db = getDB();
@@ -26,7 +26,7 @@ async function getPlayerCard(user_id) {
       equipped = '';
     } else {
       const [earnRows] = await db.execute(
-        `SELECT \`${equipped}\` AS cnt FROM user_accolades WHERE user_id = ? LIMIT 1;`,
+        `SELECT ${quoteColumn(equipped)} AS cnt FROM user_accolades WHERE user_id = ? LIMIT 1;`,
         [user_id]
       );
       if (!earnRows[0] || earnRows[0].cnt === 0) {
@@ -43,23 +43,27 @@ async function getPlayerCards(user_ids) {
   return results.filter(r => r !== null);
 }
 
+// The legacy route's set: today's inline access_token check, then equipPlayerCard().
 async function setPlayerCard(user_id, access_token, equipped_accolade_key) {
   const db = getDB();
-
-  // Inline auth: reject unless the token matches the user.
   const [authRows] = await db.execute(
     `SELECT user_id FROM users WHERE user_id = ? AND access_token = ? LIMIT 1;`,
     [user_id, access_token]
   );
   if (!authRows[0]) throw new Error('Unauthorized');
+  return equipPlayerCard(user_id, equipped_accolade_key);
+}
 
-  // Validate key against the in-memory allow-list, then check the player's earn count.
+// Equips an accolade the player has earned. A key that is not an accolade, or one not earned, equips nothing ('').
+// The caller has already established who user_id is (the session on /v1, the access_token on the legacy route).
+async function equipPlayerCard(user_id, equipped_accolade_key) {
+  const db = getDB();
   let key = '';
   if (typeof equipped_accolade_key === 'string' && equipped_accolade_key !== '') {
     const valid = await isValidAccoladeKey(equipped_accolade_key);
     if (valid) {
       const [earnRows] = await db.execute(
-        `SELECT \`${equipped_accolade_key}\` AS cnt FROM user_accolades WHERE user_id = ? LIMIT 1;`,
+        `SELECT ${quoteColumn(equipped_accolade_key)} AS cnt FROM user_accolades WHERE user_id = ? LIMIT 1;`,
         [user_id]
       );
       if (earnRows[0] && earnRows[0].cnt > 0) {
@@ -82,4 +86,5 @@ module.exports = {
   getPlayerCard,
   getPlayerCards,
   setPlayerCard,
+  equipPlayerCard,
 };

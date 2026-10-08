@@ -1,3 +1,4 @@
+const log = require('../log');
 const { spawn, exec } = require('child_process');
 
 async function runCommand(command, args = []) {
@@ -17,7 +18,7 @@ async function runCommand(command, args = []) {
         return;
       }
 
-      console.log(`Spawned process PID: ${child.pid}`);
+      log.info(`Spawned process PID: ${child.pid}`);
       child.unref(); // allow parent to exit independently
 
       resolve(child.pid);
@@ -25,11 +26,11 @@ async function runCommand(command, args = []) {
       // run shell command (like "kill 1234")
       exec(command, (error, stdout, stderr) => {
         if (error) {
-          console.error("Command failed:", error.message);
+          log.error("Command failed:", error.message);
           reject(error);
           return;
         }
-        if (stderr) console.warn("Command stderr:", stderr);
+        if (stderr) log.warn("Command stderr:", stderr);
         resolve(stdout.trim());
       });
     }

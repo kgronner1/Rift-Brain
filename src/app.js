@@ -6,7 +6,10 @@ const path = require('path');
 const express = require('express');
 const morgan = require('morgan');
 
+const log = require('./log');
 const { loadEnv } = require('./config/env');
+const { createRemoteConfig } = require('./config/remote');
+const { createV1Router } = require('./routes/v1');
 const { initDB, connectDB } = require('./db');
 const { createLobbyRegistry } = require('./match/lobbies');
 const { registerLobbyRoutes } = require('./routes/legacy/lobby');
@@ -19,21 +22,25 @@ const fatalLogPath = path.join(fatalLogDir, 'fatal.log');
 // Central helper to persist fatal errors with context and stack traces.
 function logFatalError(err, context) {
   const timestamp = new Date().toISOString();
-  const details = err && err.stack ? err.stack : String(err);
+  const details = log.redactString(err && err.stack ? err.stack : String(err));
   const line = `[${timestamp}] ${context}\n${details}\n`;
   fs.appendFile(fatalLogPath, line, (writeErr) => {
     if (writeErr) {
-      console.error('Failed to write fatal log:', writeErr);
+      log.error('Failed to write fatal log:', writeErr);
     }
   });
 }
 
-// The public app: today's routes, unchanged. Takes the registry so tests can drive it without a database.
-function createPublicApp(lobbies) {
+// The public app: /v1 (RJ 465) when `v1` is given, and today's routes, unchanged. Takes the registry so tests can
+// drive it without a database. v1: {env, remote, now?} (routes/v1/index.js).
+function createPublicApp(lobbies, { v1 } = {}) {
   const app = express();
+  // Caddy on the same box is the only proxy: req.ip is the client's address behind it (spec 4.9).
+  app.set('trust proxy', 'loopback');
+  if (v1) app.use('/v1', createV1Router(v1));
   app.use(express.json());
-  // Keep request logging minimal and low overhead.
-  app.use(morgan('tiny'));
+  // Keep request logging minimal and low overhead; through log.js, like every other line.
+  app.use(morgan('tiny', { stream: log.stream }));
 
   registerLobbyRoutes(app, lobbies);
   registerStorageRoutes(app);
@@ -58,7 +65,7 @@ function createInternalApp() {
 function listen(app, port, host, name) {
   return new Promise((resolve, reject) => {
     const onListening = () => {
-      console.log(`Rift brain ${name} listener on ${host || '*'}:${port}`);
+      log.info(`Rift brain ${name} listener on ${host || '*'}:${port}`);
       resolve(server);
     };
     const server = host ? app.listen(port, host, onListening) : app.listen(port, onListening);
@@ -84,12 +91,12 @@ async function main() {
   try {
     env = loadEnv(process.env);
   } catch (err) {
-    console.error(err.message);
+    log.error(err.message);
     logFatalError(err, 'boot: environment');
     process.exitCode = 1;
     return;
   }
-  console.log(`Rift brain ENV=${env.ENV}`);
+  log.info(`Rift brain ENV=${env.ENV}`);
 
   initDB(env.MYSQL);
   await connectDB();
@@ -97,7 +104,15 @@ async function main() {
   const lobbies = createLobbyRegistry({ ports: env.GAME_PORTS, serverBinary: env.SERVER_BINARY });
   lobbies.start();
 
-  await listen(createPublicApp(lobbies), env.PUBLIC_PORT, env.BIND_HOST, 'public');
+  // A new environment serves /v1 with its remote config's gates; the legacy brain serves today's routes only.
+  let v1 = null;
+  if (env.ENV !== 'legacy') {
+    const remote = createRemoteConfig({ env: env.ENV, url: env.CONFIG_URL });
+    await remote.start();
+    v1 = { env, remote };
+  }
+
+  await listen(createPublicApp(lobbies, { v1 }), env.PUBLIC_PORT, env.BIND_HOST, 'public');
   if (env.INTERNAL_PORT !== null) {
     await listen(createInternalApp(), env.INTERNAL_PORT, '127.0.0.1', 'internal');
   }

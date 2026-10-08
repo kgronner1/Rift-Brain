@@ -87,6 +87,33 @@ function formatUserStatsColumnName(column) {
   return `${label}${suffix}`;
 }
 
+// The two currency columns a single-player sync may write besides the sp_ columns.
+const SP_SYNC_CURRENCY_COLUMNS = Object.freeze(['currency_amount', 'currency_earned_alltime']);
+
+// Which keys of a single-player sync may be written (spec M3, SQL hardening): a user_stats column AND (sp_ or one of
+// the two currency columns), with a finite number for a value. Everything else is ignored and reported, never put
+// into SQL. `_last_updated` is the sync's own timestamp, neither written nor reported.
+// stats: the client's map; columns: Set of user_stats column names. Pure.
+function filterSpStatsKeys(stats, columns) {
+  const keys = [];
+  const ignored = [];
+  if (!stats || typeof stats !== 'object' || Array.isArray(stats)) return { keys, ignored };
+  for (const key of Object.keys(stats)) {
+    if (key === '_last_updated') continue;
+    const allowed = columns.has(key) && (/^sp_[a-z0-9_]+$/.test(key) || SP_SYNC_CURRENCY_COLUMNS.includes(key));
+    const value = stats[key];
+    if (allowed && typeof value === 'number' && Number.isFinite(value)) keys.push(key);
+    else ignored.push(key);
+  }
+  return { keys, ignored };
+}
+
+// A column name for SQL, after it has been checked against INFORMATION_SCHEMA: backtick-quoted.
+function quoteColumn(name) {
+  if (typeof name !== 'string' || !/^[A-Za-z0-9_]{1,64}$/.test(name)) throw new Error('refusing to quote a column name');
+  return `\`${name}\``;
+}
+
 async function requireUserStatsField(field) {
   if (!field) throw new Error('Invalid user_stats field');
   const { set } = await loadUserStatsColumns();
@@ -101,4 +128,7 @@ module.exports = {
   getUserStatsColumns,
   formatUserStatsColumnName,
   requireUserStatsField,
+  filterSpStatsKeys,
+  quoteColumn,
+  SP_SYNC_CURRENCY_COLUMNS,
 };

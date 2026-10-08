@@ -1,6 +1,7 @@
 // Today's account, stats, accolade and player-card routes, unchanged in path and shape.
 // /v1/* (M3) and /internal/v1/* (M4) replace them; these go at cutover.
 
+const log = require('../../log');
 const fs = require('fs').promises;
 const path = require('path');
 const { getDB } = require('../../db');
@@ -27,8 +28,8 @@ function registerStorageRoutes(app) {
   //// login ////
 
   app.post('/create_user', async function (req, res) {
-    console.log("create_user endpoint hit:", req.body);
-    //console.log("reqAAA:", req);
+
+
   
     try {
       const result = await createUser(req.body); // Use req.body for POST data
@@ -38,7 +39,7 @@ function registerStorageRoutes(app) {
         data: result
       });
     } catch (error) {
-      console.error("User creation failed:", error.message);
+      log.error("User creation failed:", error.message);
       res.status(400).json({
         success: false,
         message: error.message
@@ -48,8 +49,8 @@ function registerStorageRoutes(app) {
 
   app.post('/login_user', async function (req, res) {
 
-    console.log("login_user endpoint hit:", req.body);
-    //console.log("reqAAA:", req);
+
+
   
     try {
       const result = await loginUser(req.body); // Use req.body for POST data
@@ -59,7 +60,7 @@ function registerStorageRoutes(app) {
         data: result
       });
     } catch (error) {
-      console.error("User login failed:", error.message);
+      log.error("User login failed:", error.message);
       res.status(400).json({
         success: false,
         message: error.message
@@ -70,8 +71,8 @@ function registerStorageRoutes(app) {
 
   app.post('/passive_login_user', async function (req, res) {
 
-    console.log("passive_login_user endpoint hit:", req.body);
-    //console.log("reqAAA:", req);
+
+
   
     try {
       const result = await passiveLoginUser(req.body); // Use req.body for POST data
@@ -81,7 +82,7 @@ function registerStorageRoutes(app) {
         data: {"result": result}
       });
     } catch (error) {
-      console.error("Pasive user login failed:", error.message);
+      log.error("Pasive user login failed:", error.message);
       res.status(400).json({
         success: false,
         message: error.message
@@ -109,7 +110,7 @@ function registerStorageRoutes(app) {
 
   app.post('/post_match_player_stats_update', async function (req, res) {
 
-    console.log("post_match_player_stats_update endpoint hit:", req.body);
+
 
     try {
       let response = await postMatchPlayerStatsUpdate(req.body);
@@ -119,7 +120,7 @@ function registerStorageRoutes(app) {
         data: response
       });
     } catch (error) {
-      console.error("Update players' stats failed:", error.message);
+      log.error("Update players' stats failed:", error.message);
       res.status(400).json({
         success: false,
         message: error.message
@@ -130,17 +131,18 @@ function registerStorageRoutes(app) {
 
   app.post('/single_player_stats_sync', async function (req, res) {
 
-    console.log("single_player_stats_sync endpoint hit:", req.body);
+
 
     try {
-      let response = await singlePlayerStatsSync(req.body);
+      // Today's shape: the keys it ignored are a /v1 field.
+      const { ignored_keys, ...response } = await singlePlayerStatsSync(req.body);
       res.status(200).json({
         success: true,
         message: "Single player stats synced successfully",
         data: response
       });
     } catch (error) {
-      console.error("Single player stats syncs failed:", error.message);
+      log.error("Single player stats syncs failed:", error.message);
       res.status(400).json({
         success: false,
         message: error.message
@@ -151,17 +153,17 @@ function registerStorageRoutes(app) {
 
   app.post('/player_accolades_sync', async function (req, res) {
 
-    console.log("play_accolades_sync endpoint hit:", req.body);
+
 
     try {
-      let response = await playerAccoladesSync(req.body);
+      const { ignored_keys, ...response } = await playerAccoladesSync(req.body);
       res.status(200).json({
         success: true,
         message: "Player accolades synced successfully",
         data: response
       });
     } catch (error) {
-      console.error("Player accolades syncs failed:", error.message);
+      log.error("Player accolades syncs failed:", error.message);
       res.status(400).json({
         success: false,
         message: error.message
@@ -180,7 +182,7 @@ function registerStorageRoutes(app) {
       }
       res.status(200).json({ success: true, message: "", data: columns, labels });
     } catch (error) {
-      console.error("User stats columns fetch failed:", error.message);
+      log.error("User stats columns fetch failed:", error.message);
       res.status(400).json({ success: false, message: error.message });
     }
 
@@ -237,7 +239,7 @@ function registerStorageRoutes(app) {
       }
       res.status(200).json({ success: true, message: "", data: { list, user } });
     } catch (error) {
-      console.error("Leaderboard fetch failed:", error.message);
+      log.error("Leaderboard fetch failed:", error.message);
       res.status(400).json({ success: false, message: error.message });
     }
 
@@ -256,7 +258,7 @@ function registerStorageRoutes(app) {
       );
       res.status(200).json({ success: true, message: "", data: rows[0] || null });
     } catch (error) {
-      console.error("User single stat fetch failed:", error.message);
+      log.error("User single stat fetch failed:", error.message);
       res.status(400).json({ success: false, message: error.message });
     }
 
@@ -278,7 +280,7 @@ function registerStorageRoutes(app) {
 
       res.status(200).json({ success: true, message: "", data: rows[0] || null });
     } catch (error) {
-      console.error("User all stats fetch failed:", error.message);
+      log.error("User all stats fetch failed:", error.message);
       res.status(400).json({ success: false, message: error.message });
     }
 
@@ -296,7 +298,7 @@ function registerStorageRoutes(app) {
 
       res.status(200).json({ success: true, message: "", data: resp || null });
     } catch (error) {
-      console.error("User all accolades fetch failed:", error.message);
+      log.error("User all accolades fetch failed:", error.message);
       res.status(400).json({ success: false, message: error.message });
     }
 
@@ -315,7 +317,7 @@ function registerStorageRoutes(app) {
       if (!card) throw new Error('User not found');
       res.status(200).json({ success: true, message: '', data: card });
     } catch (error) {
-      console.error('GET /player_card failed:', error.message);
+      log.error('GET /player_card failed:', error.message);
       res.status(400).json({ success: false, message: error.message });
     }
   });
@@ -330,7 +332,7 @@ function registerStorageRoutes(app) {
       const cards = await getPlayerCards(user_ids);
       res.status(200).json({ success: true, message: '', data: cards });
     } catch (error) {
-      console.error('GET /player_cards failed:', error.message);
+      log.error('GET /player_cards failed:', error.message);
       res.status(400).json({ success: false, message: error.message });
     }
   });
@@ -349,7 +351,7 @@ function registerStorageRoutes(app) {
       if (error.message === 'Unauthorized') {
         return res.status(403).json({ success: false, message: 'Unauthorized' });
       }
-      console.error('PUT /player_card failed:', error.message);
+      log.error('PUT /player_card failed:', error.message);
       res.status(400).json({ success: false, message: error.message });
     }
   });
