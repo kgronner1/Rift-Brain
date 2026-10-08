@@ -75,9 +75,20 @@ APP="rift-brain-$ENV_NAME"
 ECOSYSTEM="$ENV_DIR/ecosystem.config.js"
 SITE="/etc/caddy/sites/$ENV_NAME.caddy"
 
-say() { echo "[provision $ENV_NAME] $*"; }
+# Colours like deploy_server.sh's: PASS and the applied "done" green, WARNING and a plan-only "done" yellow, FAIL red.
+# provision_box.sh runs this over ssh -t, so a terminal at the far end still gets them.
+if [ -t 1 ]; then RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; RESET=$'\033[0m'
+else RED=""; GREEN=""; YELLOW=""; RESET=""; fi
+say() {
+  local colour=""
+  case "$*" in
+    PASS*|"done (applied)") colour="$GREEN" ;;
+    WARNING*|"done (plan only)") colour="$YELLOW" ;;
+  esac
+  echo "${colour}[provision $ENV_NAME] $*${colour:+$RESET}"
+}
 plan() { echo "[provision $ENV_NAME] PLAN: $*"; }
-die() { echo "[provision $ENV_NAME] FAIL: $*" >&2; exit 1; }
+die() { echo "${RED}[provision $ENV_NAME] FAIL: $*${RED:+$RESET}" >&2; exit 1; }
 step_on() { [[ " $STEPS " == *" $1 "* ]]; }
 admin_sql() { "${MYSQL_ADMIN[@]}" --batch --skip-column-names -e "$1"; }
 # The generated passwords are hex; a hand-edited one must still be safe inside a SQL string literal.
