@@ -73,7 +73,7 @@ function checkClient(client, { serverEnv, view, multiplayer, nowMs }) {
 function clientHeaders({ serverEnv, config, now = () => Date.now(), multiplayerRoutes = MULTIPLAYER_ROUTES }) {
   return function clientHeadersMiddleware(req, res, next) {
     const client = readClientHeaders(req);
-    req.client = client;
+    req.rjClient = client;
     const failure = checkClient(client, {
       serverEnv,
       view: config(),

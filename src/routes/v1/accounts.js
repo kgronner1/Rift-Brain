@@ -28,7 +28,7 @@ function registerAccountRoutes(router, deps) {
     let account;
     try {
       account = await createAccount({ username: b.username, email: b.email, password: b.password },
-        { platform: req.client.platform, installId: req.client.install });
+        { platform: req.rjClient.platform, installId: req.rjClient.install });
     } catch (error) {
       if (error && RULE_MESSAGE_RE.test(String(error.message))) fail('VALIDATION', { message: error.message });
       throw error;

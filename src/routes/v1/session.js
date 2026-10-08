@@ -38,7 +38,7 @@ function registerSessionRoutes(router, deps) {
       const user = await verifyLogin(id, password);
       if (!user) fail('AUTH_INVALID');
       const credential = await issueCredential(getDB(), {
-        userId: user.user_id, platform: req.client.platform, installId: req.client.install,
+        userId: user.user_id, platform: req.rjClient.platform, installId: req.rjClient.install,
       });
       sendOk(res, { user: { id: user.user_id, username: user.username }, session: sessionFor(user), credential });
       return;

@@ -442,6 +442,12 @@ step_verify() {
   else
     say "WARNING: POST /user_stats_columns failed; check pm2 logs $APP"
   fi
+  # /v1 (RJ 465): the envelope, behind the gates, with this environment's headers.
+  if curl -sS -H "X-RJ-Env: $ENV_NAME" -H 'X-RJ-Api: 1' "http://127.0.0.1:$PUBLIC_PORT/v1/stats/columns" | grep -q '"result":"ok"'; then
+    say "PASS /v1 answers in the envelope"
+  else
+    say "WARNING: GET /v1/stats/columns did not answer ok; check pm2 logs $APP (SESSION_KEY and CONFIG_URL in .env)"
+  fi
   ok=0
   for _ in $(seq 1 30); do
     curl -fsS -o /dev/null "https://$API_HOST/" && { ok=1; break; }
