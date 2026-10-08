@@ -94,7 +94,10 @@ step_preflight() {
   say "node $(node -v), npm $(npm -v), pm2 $(pm2 -v 2>/dev/null | tail -n 1)"
   local major
   major="$(node -p 'process.versions.node.split(".")[0]')"
-  [ "$major" -ge 18 ] || die "node $(node -v) is too old; the brain needs 18 or newer"
+  # 16 is what the box has (and what the legacy brain runs on); the brain's runtime code and dependencies load on
+  # 16.20.2. Node 16 is past end of life: the upgrade is RJ 477.
+  [ "$major" -ge 16 ] || die "node $(node -v) is too old; the brain needs 16 or newer"
+  [ "$major" -ge 18 ] || say "WARNING: node $(node -v) is past end of life (RJ 477)"
   admin_sql 'SELECT 1' >/dev/null 2>&1 || die "cannot reach MariaDB as admin with: ${MYSQL_ADMIN[*]} (set RJ_MYSQL_ADMIN)"
   say "MariaDB $(admin_sql 'SELECT VERSION()')"
   [ "$(admin_sql "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='$LEGACY_DB'")" = 1 ] \
