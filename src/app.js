@@ -10,6 +10,7 @@ const log = require('./log');
 const { loadEnv } = require('./config/env');
 const { createRemoteConfig } = require('./config/remote');
 const { createV1Router } = require('./routes/v1');
+const { createAdmission } = require('./admission/admission');
 const { initDB, connectDB } = require('./db');
 const { createLobbyRegistry } = require('./match/lobbies');
 const { createMatchRegistry, brainUrlFor } = require('./match/registry');
@@ -130,7 +131,9 @@ async function main() {
   // The internal listener first: lobbies that outlived the last brain heartbeat into it from the first moment.
   await listen(createInternalApp({ env, match, config }), env.INTERNAL_PORT, '127.0.0.1', 'internal');
   match.start();
-  await listen(createPublicApp(null, { v1: { env, remote, match } }), env.PUBLIC_PORT, env.BIND_HOST, 'public');
+  const admission = createAdmission({ env, config });
+  admission.start();
+  await listen(createPublicApp(null, { v1: { env, remote, match, admission } }), env.PUBLIC_PORT, env.BIND_HOST, 'public');
 }
 
 if (require.main === module) {

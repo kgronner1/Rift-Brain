@@ -5,8 +5,8 @@
 //   3. express.json   the body (64 KB at most)
 //   4. the routes     each locked route checks the session itself (requireSession), then its rate limits
 //   5. notFound, errors   everything that went wrong, as the envelope
-// /v1/match/join and /v1/queue/:ticket (M4) are here when a match registry is given; the admission kind of
-// /v1/queue arrives with M6.
+// /v1/match/join (M4) is here when a match registry is given. /v1/queue/:ticket always is: it serves the admission
+// queue (M6) and, with a registry, the lobby wait.
 
 const express = require('express');
 const { fail } = require('../../contract/envelope');
@@ -20,6 +20,8 @@ const { registerAccountRoutes } = require('./accounts');
 const { registerMeRoutes } = require('./me');
 const { registerUserRoutes } = require('./users');
 const { registerMatchRoutes } = require('./match');
+const { registerQueueRoutes } = require('./queue');
+const { createAdmission } = require('../../admission/admission');
 
 const BODY_LIMIT = '64kb';
 
@@ -29,9 +31,12 @@ function rateLimited(r) {
 
 // env: config/env.js's (ENV and SESSION_KEY are used); remote: config/remote.js's createRemoteConfig().
 // match: match/registry.js's createMatchRegistry() (optional); findUser: tests' stand-in for the users table.
-function createV1Router({ env, remote, now = () => Date.now(), limiter = createRateLimiter({ now }), match = null, findUser }) {
+// admission: admission/admission.js's createAdmission(); the caller starts its sweep. Without one, the router makes
+// its own, which is swept only when a test calls sweep().
+function createV1Router({ env, remote, now = () => Date.now(), limiter = createRateLimiter({ now }), match = null, findUser, admission }) {
   if (!env.SESSION_KEY) throw new Error('/v1 needs SESSION_KEY');
   const config = () => remote.current();
+  admission = admission || createAdmission({ env, config, now });
   const router = express.Router();
 
   router.use(requestId());
@@ -39,7 +44,7 @@ function createV1Router({ env, remote, now = () => Date.now(), limiter = createR
   router.use(express.json({ limit: BODY_LIMIT }));
 
   const deps = {
-    env, config, now, limiter, rateLimited,
+    env, config, now, limiter, rateLimited, admission,
     requireSession: requireSession({ keyHex: env.SESSION_KEY, serverEnv: env.ENV, now }),
   };
   registerSessionRoutes(router, deps);
@@ -47,6 +52,7 @@ function createV1Router({ env, remote, now = () => Date.now(), limiter = createR
   registerMeRoutes(router, deps);
   registerUserRoutes(router, deps);
   if (match) registerMatchRoutes(router, { ...deps, match, ...(findUser ? { findUser } : {}) });
+  registerQueueRoutes(router, { admission, match });
 
   router.use(notFound);
   router.use(errors({ config }));

@@ -57,7 +57,8 @@ src/config/remote.js    the brain's copy of its remote config document, read eve
 src/contract/           the /v1 envelope and the error code registry (RJ 465)
 src/middleware/         /v1's request id, client-header gates, session auth, rate limits, errors (RJ 465)
 src/auth/               tokens (sign/verify, the lobby key) and device credentials (RJ 465)
-src/routes/v1/          API v1 (RJ 465); /v1/match/join and /v1/queue's lobby kind (RJ 466); admission is M6
+src/routes/v1/          API v1 (RJ 465); /v1/match/join and /v1/queue's lobby kind (RJ 466); its admission kind (RJ 468)
+src/admission/          the admission queue in front of sign-in (RJ 468, spec M6), in process memory
 src/log.js              every log line, with tokens, credentials and passwords redacted (RJ 465)
 fixtures/               join_token_v1.txt and its builder: the client's cross-language token test (RJ 465)
 test/                   npm test (node --test); pure tests need no database
@@ -230,3 +231,37 @@ heartbeat). `match/results` takes today's array and answers `{players, ignored_u
 `/v1/match/join` outcome), `test/internal_http.test.js` (the lobby key, adoption after a restart, the seat checks)
 and `test/match_host.test.js` (a real spawn and UDP test) need no database; `test/internal.db.test.js` writes match
 results against one.
+
+
+## Admission queue (RJ 468, spec M6)
+
+A token bucket in front of sign-in, **off by default**. Every value is `server.admission` in the environment's config
+document, read live: a publish switches it on or off, or retunes it, within the brain's 30 s config poll, with no
+restart.
+
+- **Who queues.** With `enabled: true`, when the bucket is empty **or** anyone is already waiting, `POST /v1/session`
+  and `POST /v1/accounts` answer `queued` (202, kind `admission`) instead of signing in, unless the request is a
+  **refresh** (`{credential, session}` whose session is genuine, issued to that credential's user, and younger than
+  `session_refresh_grace_sec`) or carries a valid `grant`. Input checks and rate limits come first; the database comes
+  after, so a queued request costs no bcrypt and no query.
+- **The bucket** holds `burst` tokens and refills at `rate_per_min`. A sweep every second grants waiting tickets FIFO,
+  one token each. While anyone waits, tokens are not capped at `burst` until the sweep has spent them.
+- **A ticket** (`q_...`) is bound to `X-RJ-Install`, one per install (asking again returns the same place). `expires_in_sec`
+  is `ticket_ttl_sec`, renewed by every poll; a ticket unpolled that long is dropped. `poll_after_ms` is
+  `clamp(eta_ms / 10, 2000, 30000) x [0.8, 1.2]`, per response. Position and eta never rise for a ticket.
+- **The grant.** `GET /v1/queue/:ticket` on a granted ticket answers `{grant}`: a token (`typ: "g"`, signed with
+  `SESSION_KEY`, spec 4.8) naming the ticket and the install, valid `grant_ttl_sec`. Sent back as `grant` on
+  `/v1/session` or `/v1/accounts` from the same install, it admits the request and ends the ticket; it stays valid to its
+  `exp` for that install (a mistyped password does not cost the place). From another install, or forged, or of another
+  env: `QUEUE_TICKET_INVALID`. Expired: the request is queued again at its ticket's place. An unredeemed grant lapses
+  and its ticket re-queues at the front.
+- **Off** (`enabled: false`) admits everyone at once; every waiting ticket is granted at its next poll or within a
+  second, and the bucket is held full for the next time it is switched on.
+- `/v1/queue/:ticket` serves both kinds: the admission queue is asked first, then the match registry's lobby wait.
+  An unknown, expired or foreign ticket is `QUEUE_TICKET_INVALID` (404). `DELETE` leaves the line.
+- In memory, single host: a brain restart empties the line (players re-queue at their next sign-in; a grant already
+  issued still verifies). The brain logs `[admission] on` / `off` as the switch flips; never a ticket's grant.
+
+**Tests.** `test/admission.test.js` (the queue itself over an injected clock; no fetch, so it also runs on Node 16),
+`test/admission_http.test.js` (the routes, no database) and `test/admission.db.test.js` (a grant redeemed for a
+session, against a database built from `migrations/`, with `RJ_TEST_DB`).

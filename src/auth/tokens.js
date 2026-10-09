@@ -99,6 +99,19 @@ function isSessionRefresh(sessionToken, { keyHex, env, nowSec, uid, graceSec }) 
   return age >= 0 && age < graceSec;
 }
 
+// --- admission grant (M6) ----------------------------------------------------------------------------------------
+
+// {v, typ:"g", ticket, install, env, iat, exp}, signed with SESSION_KEY: redeemed at /v1/session or /v1/accounts by
+// the install it names. Spec 4.8's table lists no iat; verify() requires one on every token, so a grant carries it.
+function signGrant({ ticket, install, env, nowSec, keyHex, ttlSec }) {
+  const payload = { v: TOKEN_VERSION, typ: 'g', ticket, install, env, iat: nowSec, exp: nowSec + ttlSec };
+  return { token: sign(payload, keyHex), payload };
+}
+
+function verifyGrant(token, { keyHex, env, nowSec }) {
+  return verify(token, { keyHex, typ: 'g', env, nowSec });
+}
+
 // --- join (M4 issues these; the fixture pins the format now) -----------------------------------------------------
 
 function signJoin({ uid, uname, lobby, wire, fp, env, seat, host, jti, nowSec, keyHex, ttlSec = JOIN_TTL_SEC }) {
@@ -123,6 +136,8 @@ module.exports = {
   signSession,
   verifySession,
   isSessionRefresh,
+  signGrant,
+  verifyGrant,
   signJoin,
   deriveLobbyKey,
 };
