@@ -281,7 +281,20 @@ restart.
   re-queued). The client polls a granted ticket until a session is issued, so this is what keeps a redemption the
   database refused, or whose answer was lost, from costing the grant. From another install, or forged, or of another
   env: `QUEUE_TICKET_INVALID`. Expired: the request is queued again at its ticket's place. An unredeemed grant lapses
-  and its ticket re-queues at the front.
+  and its ticket re-queues at the front; one its ticket never collected (not polled since the grant) hands its token
+  back.
+- **Abandoned tickets are passed over, not dropped (RJ 481).** A waiting ticket that misses its poll -- not polled within
+  the `poll_after_ms` it was last told plus 15 s -- is *idle*: the sweep grants past it, it spends no token, and it is not
+  counted in anyone's `position`; and a newcomer finding only idle tickets waiting is admitted on a free token. It keeps
+  its place in the line, and its next poll makes it live again, ahead of everyone who was behind it. A killed client
+  (drill 6, 2026-10-09) therefore costs the line nothing: before, each dead ticket was granted at the head, lapsed back
+  to the front every `grant_ttl_sec` and held the line for its whole `ticket_ttl_sec`. Missing a poll is exactly what a
+  dead client and a backgrounded one have in common, so neither is dropped for it; the difference is that the
+  backgrounded one comes back, and when it does (5 minutes later, or after a kill and relaunch that resumes the saved
+  ticket) it is first among everyone still waiting and is granted at the next token. What it gives up is only the tokens
+  that came round while it was away, which went to the live tickets behind it. A granted ticket the client is
+  collecting is polled every `queue_poll_default_ms`, so a mistyped password keeps the grant exactly as before; a
+  ticket nobody polls for `ticket_ttl_sec` is still dropped.
 - **Off** (`enabled: false`) admits everyone at once; every waiting ticket is granted at its next poll or within a
   second, and the bucket is held full for the next time it is switched on.
 - `/v1/queue/:ticket` serves both kinds: the admission queue is asked first, then the match registry's lobby wait.

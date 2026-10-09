@@ -13,6 +13,11 @@
 //   polls with the same {grant} until that exp, then is dropped (never re-queued: it was admitted). The client polls a
 //   granted ticket until a session is issued (Net.queue), and a QUEUE_TICKET_INVALID there would drop its grant.
 // - A ticket nobody polls for ticket_ttl_sec is dropped; every poll extends it.
+// - Idle tickets are passed over (RJ 481). A waiting ticket not polled within the poll_after_ms it was last told, plus
+//   IDLE_GRACE_MS, is idle: the sweep grants past it and it is not counted in anyone's position, but it keeps its
+//   place, so its next poll makes it live again ahead of everyone who was behind it. A grant nobody collected (its
+//   ticket not polled since the grant) gives its token back when it lapses. So a dead client costs the line nothing,
+//   and a backgrounded one loses no place to anyone still waiting.
 // - enabled: false admits everyone at once, and every waiting ticket is granted on its next poll or sweep.
 // - Position and eta never rise for a ticket (a lapsed grant re-queued at the front would otherwise push everyone
 //   back by one).
@@ -26,6 +31,10 @@ const SWEEP_MS = 1000;
 const POLL_MIN_MS = 2000;
 const POLL_MAX_MS = 30000;
 const POLL_JITTER = 0.2;
+// How late past its poll_after_ms a waiting ticket's poll may be before the sweep passes it over: network latency and
+// a client's timer, not a backgrounded app (that pauses polling, and is passed over until it resumes).
+const IDLE_GRACE_MS = 15000;
+const GRANTED_POLL_DEFAULT_MS = 5000;
 const MESSAGE = "Lots of pilots are launching right now. You're in line.";
 
 function clamp(v, lo, hi) {
@@ -77,7 +86,8 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
     const tk = {
       id: `q_${crypto.randomBytes(16).toString('base64url')}`,
       kind: 'admission', install, createdAt: t, expiresAt: 0,
-      grant: null, grantExpSec: 0, redeemed: false, lastPosition: Infinity, lastEta: Infinity,
+      grant: null, grantExpSec: 0, collected: false, redeemed: false, lastPosition: Infinity, lastEta: Infinity,
+      seenAt: t, pollAfterMs: 0,
     };
     touch(tk, t);
     tickets.set(tk.id, tk);
@@ -86,11 +96,23 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
     return tk;
   }
 
+  // A poll (or a sign-in) from the ticket's install: it is alive.
   function touch(tk, t) {
     tk.expiresAt = t + settings().ticket_ttl_sec * 1000;
+    tk.seenAt = t;
+    if (tk.grant) {
+      tk.collected = true;
+      const c = config().tunables;
+      tk.pollAfterMs = (c && c.queue_poll_default_ms) || GRANTED_POLL_DEFAULT_MS;
+    }
+  }
+
+  function idle(tk, t) {
+    return t > tk.seenAt + tk.pollAfterMs + IDLE_GRACE_MS;
   }
 
   function redeemed(tk) {
+    tk.collected = true;
     tk.redeemed = true;
   }
 
@@ -103,26 +125,44 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
     });
     tk.grant = g.token;
     tk.grantExpSec = g.payload.exp;
+    tk.collected = false;
   }
 
   // A grant past its exp: an unredeemed one's ticket goes back to the front of the line, a redeemed one's is dropped.
+  // One nobody collected hands its token back: no admission was spent on it.
   function lapseIfDue(tk, t) {
     if (tk.grant && nowSecFrom(t) >= tk.grantExpSec) {
       if (tk.redeemed) {
         drop(tk);
         return true;
       }
+      if (!tk.collected && settings().enabled) tokens += 1;
       tk.grant = null;
       tk.grantExpSec = 0;
+      tk.collected = false;
       waiting.unshift(tk);
       return true;
     }
     return false;
   }
 
-  function view(tk) {
+  // 1 + the live tickets ahead of tk (an idle one ahead will be passed over). 0 when tk is not waiting.
+  function livePosition(tk, t) {
+    let n = 0;
+    for (const w of waiting) {
+      if (w === tk) return n + 1;
+      if (!idle(w, t)) n++;
+    }
+    return 0;
+  }
+
+  function anyLiveWaiting(t) {
+    return waiting.some((w) => !idle(w, t));
+  }
+
+  function view(tk, t) {
     const a = settings();
-    const computed = waiting.indexOf(tk) + 1;
+    const computed = livePosition(tk, t);
     const position = Math.max(1, Math.min(tk.lastPosition, computed || 1));
     const ratePerSec = a.rate_per_min / 60;
     const owed = Math.max(0, position - (a.enabled ? tokens : position));
@@ -130,9 +170,11 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
     tk.lastPosition = position;
     tk.lastEta = eta;
     const pollBase = clamp((eta * 1000) / 10, POLL_MIN_MS, POLL_MAX_MS);
+    const pollAfter = Math.round(pollBase * (1 - POLL_JITTER + 2 * POLL_JITTER * random()));
+    tk.pollAfterMs = pollAfter;
     return {
       ticket: tk.id, kind: 'admission', position, eta_sec: eta,
-      poll_after_ms: Math.round(pollBase * (1 - POLL_JITTER + 2 * POLL_JITTER * random())),
+      poll_after_ms: pollAfter,
       expires_in_sec: a.ticket_ttl_sec,
       message: MESSAGE,
     };
@@ -161,15 +203,15 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
         return { result: 'admitted' };
       }
       touch(mine, t);
-      return { result: 'queued', queued: view(mine) };
+      return { result: 'queued', queued: view(mine, t) };
     }
 
-    if (waiting.length === 0 && tokens >= 1) {
+    if (!anyLiveWaiting(t) && tokens >= 1) {
       tokens -= 1;
       return { result: 'admitted' };
     }
     if (!install) return { result: 'error', code: 'VALIDATION', message: "This build can't wait in line for online play. Please update." };
-    return { result: 'queued', queued: view(enqueue(install, t)) };
+    return { result: 'queued', queued: view(enqueue(install, t), t) };
   }
 
   // A grant sent with a sign-in. null: an expired grant whose ticket is gone, so the request queues as if it had none.
@@ -188,7 +230,7 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
         return { result: 'admitted' };
       }
       touch(tk, t);
-      return { result: 'queued', queued: view(tk) };
+      return { result: 'queued', queued: view(tk, t) };
     }
     return null;
   }
@@ -206,7 +248,7 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
     if (!tk.grant && !a.enabled) grant(tk, t);
     touch(tk, t);
     if (tk.grant) return { result: 'ok', data: { grant: tk.grant } };
-    return { result: 'queued', queued: view(tk) };
+    return { result: 'queued', queued: view(tk, t) };
   }
 
   // DELETE /v1/queue/:ticket. null when unknown (as poll).
@@ -239,12 +281,14 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
       tokens = Math.min(tokens, a.burst);
       return;
     }
-    let n = 0;
-    while (n < waiting.length && tokens >= 1) {
+    const due = [];
+    for (const tk of waiting) {
+      if (tokens < 1) break;
+      if (idle(tk, t)) continue;
       tokens -= 1;
-      n++;
+      due.push(tk);
     }
-    for (const tk of waiting.slice(0, n)) grant(tk, t);
+    for (const tk of due) grant(tk, t);
     tokens = Math.min(tokens, a.burst);
   }
 
@@ -273,4 +317,4 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
   };
 }
 
-module.exports = { createAdmission, SWEEP_MS, POLL_MIN_MS, POLL_MAX_MS, MESSAGE };
+module.exports = { createAdmission, SWEEP_MS, POLL_MIN_MS, POLL_MAX_MS, IDLE_GRACE_MS, MESSAGE };
