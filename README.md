@@ -292,3 +292,25 @@ deleted. No other table holds personal data. It is safe to re-run, and a scrubbe
 A fresh copy into dev (`provision_box.sh --env dev --recopy-db`) brings real data back: scrub straight after it.
 The scrubbed password is public on purpose (this repository is public), so a scrubbed database holds no account
 worth protecting. `infra/test/provision_db.sh` tests the script in Docker, the refusals included.
+
+## Release drills (RJ 470, spec M8)
+
+Every alpha release runs the drill checklist against dev first: Wobble Planet's `docs/release-drills.md` holds the
+table, the exact commands, what to watch on the phone, and the dated results. Drills 1, 2 and 7 are scripts here, each
+PLAN (read-only probes, nothing published, no sign-in) by default and `--run` to do it, each printing
+`DRILL<n> PASS` / `DRILL<n> FAIL` lines and a `DRILL<n> RESULT:`:
+
+```
+bash ops/drills/drill1_version_floor.sh --build <N> --user user<id> --run [--pause]   floors above the build, then put back
+bash ops/drills/drill2_server_behind.sh --user user<id> --run                         a newer wire: SERVER_BEHIND
+bash ops/drills/drill7_env_isolation.sh --user user<id> --run                         dev's token and credential at alpha
+bash ops/drills/test/drills_local.sh                                                  all three against local brains (Docker)
+```
+
+Drill 1 republishes the dev document it started from on any exit (an EXIT trap), unless someone else published dev
+meanwhile. A drill that signs in keeps the one credential it was issued in `~/.config/rift-jumpers/` and restores from
+it afterwards, so drills never pile credentials up in the dev database. `drills_local.sh` stands up MariaDB, a dev and
+an alpha brain and a local HTTPS config server, runs every drill in both modes, stops drill 1 on purpose after its
+first publish to see it restore, and shows drills 2 and 7 failing on a broken setup.
+
+The cutover runbook is infra/README.md, "The cutover, in order".
