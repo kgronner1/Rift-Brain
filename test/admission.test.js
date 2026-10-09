@@ -28,7 +28,15 @@ function setup(admission = {}, { random = Math.random } = {}) {
       a.sweep();
     }
   };
-  return { a, view, clock, advance, run, lines };
+  // As run, with the given clients alive: each polls its ticket every second (live: [[ticket, n], ...]).
+  const runLive = (sec, live) => {
+    for (let i = 0; i < sec; i++) {
+      advance(1000);
+      a.sweep();
+      for (const [tk, n] of live) a.poll(tk, `install-${n}`);
+    }
+  };
+  return { a, view, clock, advance, run, runLive, lines };
 }
 
 const install = (n) => `install-${n}`;
@@ -176,11 +184,11 @@ test('a grant is redeemed by its install only; a foreign or forged one is QUEUE_
 test('a granted ticket polled again answers the same {grant} until it is redeemed, and after, until the grant exp', () => {
   // The client (Net.queue) re-polls a granted ticket every queue_poll_default_ms until a session is issued, so a
   // redemption the database then refuses (a mistyped password) or whose answer is lost must not cost the grant.
-  const { a, run, advance } = setup({ rate_per_min: 3, burst: 1, grant_ttl_sec: 30 });
+  const { a, run, runLive, advance } = setup({ rate_per_min: 3, burst: 1, grant_ttl_sec: 30 });
   signIn(a, 0);
   const tk = signIn(a, 1).queued.ticket;
-  signIn(a, 2);
-  run(21);
+  const tk2 = signIn(a, 2).queued.ticket;
+  runLive(21, [[tk, 1]]);
   const grant = a.poll(tk, install(1)).data.grant;
   for (let s = 0; s < 4; s++) {
     advance(5000);
@@ -194,6 +202,7 @@ test('a granted ticket polled again answers the same {grant} until it is redeeme
   assert.equal(a.poll(tk, install(1)), null, 'a redeemed ticket is dropped at its grant exp (the route: QUEUE_TICKET_INVALID)');
   assert.equal(a.tickets.has(tk), false);
   assert.ok(!a.waiting.some((w) => w.id === tk));
+  a.poll(tk2, install(2)); // someone is waiting, alive
   assert.equal(signIn(a, 1).result, 'queued', 'a later sign-in with no grant takes a new place');
   assert.notEqual(signIn(a, 1).queued.ticket, tk);
 });
@@ -240,15 +249,19 @@ test('a ticket survives 9 minutes unpolled, and each poll extends it', () => {
 test('positions and eta never rise for a ticket, even when a lapsed grant re-queues at the front', () => {
   // One token per 20 s and a 10 s grant: ticket 1's grant lapses with no token free, so it re-queues ahead of
   // everyone, and the raw position of everyone behind it goes up by one.
-  const { a, run } = setup({ rate_per_min: 3, burst: 1, grant_ttl_sec: 10 });
+  // Everyone is alive (polls every second); ticket 1 collects its grant and never redeems it.
+  const { a, runLive } = setup({ rate_per_min: 3, burst: 1, grant_ttl_sec: 10 });
   signIn(a, 0);
   const tks = [];
   for (let i = 1; i <= 8; i++) tks.push(signIn(a, i).queued.ticket);
+  const live = tks.slice(0, 7).map((tk, i) => [tk, i + 1]);
   const last = { position: Infinity, eta: Infinity };
   let lapsedSeen = false;
+  let granted1 = false;
   for (let s = 0; s < 200; s++) {
-    run(1);
-    if (a.waiting[0] && a.waiting[0].id === tks[0]) lapsedSeen = true;
+    runLive(1, live);
+    if (a.tickets.get(tks[0]) && a.tickets.get(tks[0]).grant) granted1 = true;
+    if (granted1 && a.waiting[0] && a.waiting[0].id === tks[0]) lapsedSeen = true;
     const r = a.poll(tks[7], install(8));
     if (r.result !== 'queued') break;
     assert.ok(r.queued.position <= last.position, `position ${r.queued.position} after ${last.position}`);
@@ -261,11 +274,11 @@ test('positions and eta never rise for a ticket, even when a lapsed grant re-que
 });
 
 test('an unredeemed grant lapses and its ticket re-queues at the front', () => {
-  const { a, run } = setup({ rate_per_min: 3, burst: 1, grant_ttl_sec: 10 });
+  const { a, run, runLive } = setup({ rate_per_min: 3, burst: 1, grant_ttl_sec: 10 });
   signIn(a, 0);
   const t1 = signIn(a, 1).queued.ticket;
   const t2 = signIn(a, 2).queued.ticket;
-  run(21); // one token per 20 s: ticket 1 granted
+  runLive(21, [[t1, 1], [t2, 2]]); // one token per 20 s: ticket 1 granted (and collected)
   assert.equal(a.poll(t1, install(1)).result, 'ok');
   assert.equal(a.waiting[0].id, t2);
   run(10); // its 10 s grant lapses before the next token
@@ -328,4 +341,150 @@ test('a sign-in with no install header cannot hold a ticket: VALIDATION, not an 
   assert.equal(r.result, 'error');
   assert.equal(r.code, 'VALIDATION');
   assert.equal(a.tickets.size, 0);
+});
+
+// RJ 481: abandoned tickets. A client as Net.queue runs it: polls when poll_after_ms says, redeems a grant at once,
+// and pauses (backgrounded) or stops (killed) on cue. step() advances one second and sweeps, as the 1 s timer does.
+function line(admission) {
+  const s = setup({ rate_per_min: 1, burst: 1, grant_ttl_sec: 120, ticket_ttl_sec: 600, ...admission });
+  const clients = new Map(); // n -> {ticket, nextPollAt, alive, grantedAt, admittedAt, redeem}
+  const join = (n, { alive = true, redeem = true } = {}) => {
+    const r = signIn(s.a, n);
+    assert.equal(r.result, 'queued');
+    const c = { n, ticket: r.queued.ticket, nextPollAt: s.clock.t + r.queued.poll_after_ms, alive, grantedAt: null, admittedAt: null, redeem };
+    clients.set(n, c);
+    return c;
+  };
+  const pollNow = (c) => {
+    const r = s.a.poll(c.ticket, install(c.n));
+    if (r && r.result === 'ok') {
+      if (c.grantedAt === null) c.grantedAt = s.clock.t;
+      if (c.redeem && s.a.gate({ install: install(c.n), grant: r.data.grant }).result === 'admitted') {
+        c.admittedAt = s.clock.t;
+        c.alive = false; // signed in: done with the line
+      }
+      c.nextPollAt = s.clock.t + 5000; // queue_poll_default_ms
+    } else if (r && r.result === 'queued') {
+      c.nextPollAt = s.clock.t + r.queued.poll_after_ms;
+    }
+    return r;
+  };
+  const step = (sec = 1) => {
+    for (let i = 0; i < sec; i++) {
+      s.advance(1000);
+      s.a.sweep();
+      for (const c of clients.values()) if (c.alive && s.clock.t >= c.nextPollAt) pollNow(c);
+    }
+  };
+  signIn(s.a, 0); // spends the burst: everyone after this queues
+  return { ...s, clients, join, step, pollNow };
+}
+
+test('RJ 481: dead tickets ahead no longer stall the line (one rate interval per live ticket ahead)', () => {
+  const L = line();
+  const dead = [];
+  for (let i = 1; i <= 6; i++) dead.push(L.join(i, { alive: false })); // killed while queued: never poll again
+  const l1 = L.join(7);
+  const l2 = L.join(8);
+  L.step(55);
+  // Positions count live tickets only: once the dead have missed a poll (their last poll_after_ms + IDLE_GRACE_MS),
+  // L2 is told #2, not #8.
+  assert.equal(L.a.poll(l2.ticket, install(8)).queued.position, 2, 'the dead do not count');
+  L.step(145);
+  // 1/min: L1 at the first token (60 s), L2 at the next; a poll can trail its grant by a few seconds.
+  assert.ok(l1.admittedAt !== null && l1.admittedAt - T0 <= 60000 + 10000, `L1 admitted at ${(l1.admittedAt - T0) / 1000}s`);
+  assert.ok(l2.admittedAt !== null && l2.admittedAt - T0 <= 120000 + 10000, `L2 admitted at ${(l2.admittedAt - T0) / 1000}s`);
+  for (const d of dead) assert.equal(L.a.tickets.get(d.ticket).grant, null, 'no admission was spent on a dead ticket');
+  // With nobody live waiting, a newcomer is admitted on a free token rather than queued behind the dead.
+  assert.equal(signIn(L.a, 9).result, 'admitted');
+  // Before the fix: each dead ticket held the head for ticket_ttl_sec. Measure the old rule's positive case: with every
+  // ticket alive, the same line admits L1 only after the six ahead of it.
+  const M = line();
+  for (let i = 1; i <= 6; i++) M.join(i);
+  const m7 = M.join(7);
+  M.step(480);
+  assert.ok(m7.admittedAt !== null && m7.admittedAt - T0 >= 6 * 60000, `with six live ahead, #7 admitted at ${(m7.admittedAt - T0) / 1000}s`);
+});
+
+test('RJ 481: a client that dies holding an uncollected grant costs one interval once, and its token comes back', () => {
+  const L = line();
+  const d = L.join(1, { redeem: false });
+  const l = L.join(2);
+  L.step(50);
+  d.alive = false; // killed after its last poll, just before its grant
+  L.step(15);
+  assert.ok(L.a.tickets.get(d.ticket).grant, 'granted while it still looked alive');
+  assert.equal(L.a.tickets.get(d.ticket).collected, false);
+  L.step(60); // L takes the next token: the dead grant cost it one interval
+  assert.ok(l.admittedAt !== null && l.admittedAt - T0 <= 125000, `L admitted at ${l.admittedAt && (l.admittedAt - T0) / 1000}s`);
+  L.view.server.admission.burst = 5; // room in the bucket, so the hand-back is visible past the cap
+  const before = L.a.tokens;
+  L.step(60); // the grant (issued at 60 s) lapses at 180 s
+  assert.equal(L.a.tickets.get(d.ticket).grant, null, 'lapsed');
+  assert.ok(L.a.tokens - before >= 1.9, `its token came back with the minute's own (${before} -> ${L.a.tokens})`);
+  assert.equal(L.a.waiting[0].id, d.ticket, 'the dead one went back to the front, where it is passed over');
+  assert.equal(signIn(L.a, 3).result, 'admitted', 'and a newcomer is admitted on the tokens it left');
+  L.step(600);
+  assert.equal(L.a.tickets.has(d.ticket), false, 'and is dropped at ticket_ttl_sec');
+});
+
+test('RJ 481: a ticket backgrounded 5 minutes keeps its place among everyone still waiting', () => {
+  // Only the tickets behind it that were admitted while it was away (on the tokens it was not there to collect) pass it.
+  const L = line();
+  const ahead = L.join(1);
+  const b = L.join(2);
+  const behind = [];
+  for (let i = 3; i <= 12; i++) behind.push(L.join(i));
+  L.step(30);
+  b.alive = false; // backgrounded: the client pauses polling
+  L.step(300);
+  assert.ok(ahead.admittedAt !== null);
+  assert.equal(L.a.tickets.get(b.ticket).grant, null, 'not granted while away');
+  const passed = behind.filter((c) => c.admittedAt !== null).length;
+  assert.ok(passed >= 3 && passed <= 5, `${passed} behind it admitted while it was away`);
+  const stillWaiting = behind.filter((c) => c.admittedAt === null);
+  b.alive = true; // foregrounded: polls at once
+  const resumedAt = L.clock.t;
+  const r = L.pollNow(b);
+  assert.equal(r.result, 'queued');
+  assert.equal(r.queued.ticket, b.ticket, 'the same ticket');
+  assert.equal(r.queued.position, 1, 'first among those still waiting');
+  L.step(90);
+  assert.ok(b.admittedAt !== null && b.admittedAt - resumedAt <= 60000 + 5000, 'admitted at the next token');
+  for (const c of stillWaiting) assert.ok(c.admittedAt === null || c.admittedAt > b.admittedAt, `#${c.n} not ahead of it`);
+});
+
+test('RJ 481: kill + relaunch resumes the saved ticket at its place (unchanged)', () => {
+  const L = line();
+  const ahead = L.join(1);
+  const k = L.join(2);
+  const after = L.join(3);
+  L.step(10);
+  k.alive = false; // killed
+  L.step(40);
+  // Relaunched 40 s later: the client polls its saved ticket, and a sign-in from the same install finds it too.
+  const resumed = L.pollNow(k);
+  assert.equal(resumed.result, 'queued');
+  assert.equal(resumed.queued.ticket, k.ticket);
+  const again = signIn(L.a, 2);
+  assert.equal(again.queued.ticket, k.ticket, 'one ticket per install');
+  k.alive = true;
+  L.step(200);
+  assert.ok(ahead.admittedAt < k.admittedAt && k.admittedAt < after.admittedAt, 'FIFO held');
+});
+
+test('RJ 481: a mistyped password keeps the grant (the client re-polls it, so it stays collected and live)', () => {
+  const L = line();
+  const p = L.join(1, { redeem: false });
+  const q = L.join(2);
+  L.step(70);
+  const g = L.a.poll(p.ticket, install(1));
+  assert.equal(g.result, 'ok');
+  // The sign-in with the grant is admitted; the database then refuses the password. Retyping takes 100 s, polling
+  // every 5 s as the client does with a granted ticket.
+  assert.equal(L.a.gate({ install: install(1), grant: g.data.grant }).result, 'admitted');
+  L.step(100);
+  assert.deepEqual(L.a.poll(p.ticket, install(1)), { result: 'ok', data: { grant: g.data.grant } });
+  assert.equal(L.a.gate({ install: install(1), grant: g.data.grant }).result, 'admitted', 'the retyped password');
+  assert.equal(q.admittedAt !== null, true, 'and the line kept moving behind it');
 });
