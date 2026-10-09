@@ -473,7 +473,7 @@ report_manifest() {
   # shellcheck disable=SC2016 # the single quotes hold a node program, not shell expansions
   node -e '
     const fs = require("fs"); const path = require("path");
-    const dir = process.argv[2]; let doc;
+    const dir = process.argv[1]; let doc;
     try { doc = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8")); }
     catch (e) { console.log("  WARNING: manifest.json does not parse: " + e.message); process.exit(0); }
     for (const s of (doc && Array.isArray(doc.servers)) ? doc.servers : []) {
