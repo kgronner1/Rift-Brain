@@ -14,6 +14,7 @@ infra/box/provision.sh      the box side: Caddy, /opt/rj/<env>, .env, database, 
 infra/box/*.caddy*, caddy.service   Caddy's config and unit, as provision.sh installs them
 infra/test/caddy_envelope.sh        Docker: the Caddy config validates; brain down -> 503 NET_UNREACHABLE envelope
 infra/test/provision_db.sh          Docker: provision.sh's .env + database steps against MariaDB 10.11
+infra/test/provision_node.sh        Docker: provision.sh's Node 20 steps on the box's own AL2023 release (RJ 477)
 config/<env>.client.v1.json the remote config sources (changes go through PRs)
 ops/config/validate.mjs     checks a document: types, clamps, env (src/config/remoteSchema.js)
 ops/config/publish.sh       validate, client parser, lock guard, serial, upload, invalidate, fetch back
@@ -80,6 +81,35 @@ Step 2 before step 4: the brain reads its document from boot (without one it run
 are open). Step 4 runs this checkout's HEAD, which must be on GitHub (`--ref <commit>` names another). The preflight
 warns, and does not stop, when under 250 MB of memory is available: on a t2.micro beside dev and the legacy brain it
 will. Until step 5 every `/v1/match/join` on alpha answers `SERVER_BEHIND`.
+
+## Node 20 (RJ 477)
+
+Dev and alpha run on `/usr/bin/node-20`, from AL2023's `nodejs20` (20.12.2 at the box's pinned release,
+2023.5.20240819); the legacy `rift-brain` stays on the system Node 16, which is also what pm2 runs on. Each
+environment's ecosystem file names `interpreter: '/usr/bin/node-20'`; its `npm ci` is `npm-20` run by `node-20`, and
+its migrations run on `node-20`. The preflight judges only that runtime: a floor of 20, and the end-of-life warning
+(Node 20's was 2026-04-30, so it warns). The system node is reported, never judged.
+
+provision.sh's `node` step installs `nodejs20 nodejs20-npm` with dnf **with the packages' scriptlets off**. Their only
+job is to register node-20 in the alternatives, and on this box that would repoint `/usr/bin/npm`, `/usr/bin/npx` and
+`/etc/npmrc` at Node 20 under the legacy brain (`/usr/bin/node` itself survives only because it is a plain file).
+The step refuses if the default node, npm or npx moved anyway. A later `dnf upgrade` of nodejs20 runs the scriptlets
+again: upgrade it with `--setopt=tsflags=noscripts` too. The `node` step warns when it finds npm taken.
+
+| # | Command | Changes | Undo |
+|---|---|---|---|
+| 1 | `bash infra/provision_box.sh --env dev` | nothing (plan: names the install and the one restart) | -- |
+| 2 | `bash infra/provision_box.sh --env dev --apply` | installs nodejs20 (once per box); `npm ci` in `/opt/rj/dev/brain` on Node 20; restarts **`rift-brain-dev` alone** (pm2 delete + start, its interpreter changed); `pm2 save` | below |
+| 3 | `bash infra/provision_box.sh --env alpha` | nothing (plan) | -- |
+| 4 | `bash infra/provision_box.sh --env alpha --apply` | the same for alpha; restarts **`rift-brain-alpha` alone**; no install (already there) | below |
+
+Neither touches `rift-brain` (legacy), Caddy, the `.env` files or the databases beyond what a re-run already does.
+`infra/test/provision_node.sh` runs all of it in Docker on the box's release, with a Node 16 laid out as the box's.
+
+**Undo**, per environment: from a checkout of the commit before RJ 477, `bash infra/provision_box.sh --env <env>
+--apply --ref <that commit>`. Its ecosystem file has no interpreter, so it restarts that app alone on the system
+node, after an `npm ci` by the system npm. When neither environment uses Node 20 any more:
+`sudo dnf remove nodejs20 nodejs20-npm` (leaves the default node, npm and npx as they are; the test checks it).
 
 ## Undo
 
