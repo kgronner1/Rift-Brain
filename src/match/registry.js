@@ -8,6 +8,9 @@
 // - Routing: a client on (wire, fp) plays only in (wire, fp) lobbies; manifest.js says which pairs are deployed.
 // - A join token reserves a seat for its 60 s; capacity is seated humans + reservations + bots < 4.
 // - A lobby is spawned on a port of GAME_PORTS that no lobby holds and that passes a UDP bind test.
+// - A lobby whose server process exits (seen while this brain is its parent) ends at once.
+// - Crash loops: CRASH_LOOP_LIMIT lobbies of one (wire, fp) in a row that die before their first heartbeat stop that
+//   protocol spawning for CRASH_COOLDOWN_MS; its joins answer SERVER_BEHIND, and the brain logs CRASH LOOP.
 // - A lobby with no heartbeat for 45 s is stopped and its port freed. An empty lobby ends after POSTGAME, or after
 //   120 s empty in PREGAME (or INGAME).
 // - Adoption: a restarted brain spawns nothing for 30 s (joins answer queued), adopts every lobby whose heartbeat
@@ -34,6 +37,13 @@ const POLL_MS = 3000;
 const BOOT_POLL_MS = 1000;
 const POLL_JITTER = 0.2;
 const SWEEP_MS = 1000;
+// Once a minute the sweep has the host cap and prune the game servers' logs (match/host.js).
+const LOG_MAINTENANCE_MS = 60 * 1000;
+// The crash-loop breaker: this many lobbies of one (wire, fp) in a row that die before their first heartbeat stop that
+// protocol from spawning for CRASH_COOLDOWN_MS; its players get SERVER_BEHIND meanwhile. The count is not reset by
+// the cool-down, so one more early death after it trips the breaker again at once. A heartbeat resets it.
+const CRASH_LOOP_LIMIT = 3;
+const CRASH_COOLDOWN_MS = 10 * 60 * 1000;
 const STATES = ['BOOTING', 'PREGAME', 'INGAME', 'POSTGAME'];
 const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const CODE_RE = /^[A-Z]{4}$/;
@@ -65,12 +75,17 @@ function createMatchRegistry({
   random = Math.random,
   logger = log,
   bootGraceMs = BOOT_GRACE_MS,
+  crashLoopLimit = CRASH_LOOP_LIMIT,
+  crashCooldownMs = CRASH_COOLDOWN_MS,
 }) {
   const lobbies = new Map();
   const tickets = new Map();
+  // `${wire}:${fp}` -> {early: lobbies in a row that died before their first heartbeat, blockedUntil, last}
+  const crashes = new Map();
   let bootedAt = now();
   let graceDone = false;
   let sweepTimer = null;
+  let lastLogMaintenance = -Infinity;
   let lock = Promise.resolve();
   const brainUrl = brainUrlFor(env);
 
@@ -160,8 +175,56 @@ function createMatchRegistry({
   function newLobby(fields) {
     return {
       pid: null, state: 'BOOTING', privateCode: '', seats: new Map(), bots: 0, lastHeartbeat: now(),
-      adopted: false, everSeated: new Set(), emptySince: null, ...fields,
+      heartbeated: false, adopted: false, everSeated: new Set(), emptySince: null, ...fields,
     };
+  }
+
+  // --- the crash-loop breaker --------------------------------------------------------------------------------------
+
+  const protocolKey = (wire, fp) => `${wire}:${fp}`;
+
+  // Whether (wire, fp) may not spawn right now. Logs once when a cool-down has run out.
+  function crashBlocked(wire, fp) {
+    const c = crashes.get(protocolKey(wire, fp));
+    if (!c || c.blockedUntil === null) return false;
+    if (now() < c.blockedUntil) return true;
+    c.blockedUntil = null;
+    logger.warn(`[match] crash loop: wire ${wire} fp ${fp} may spawn again after its cool-down; one more early death blocks it again`);
+    return false;
+  }
+
+  // routeProtocol(), with a protocol in a crash loop answered as not deployed (SERVER_BEHIND).
+  function routeFor(entries, wire, fp) {
+    const r = routeProtocol(entries, { wire, fp, minWire: config().gates.min_wire });
+    if (r.result === 'ok' && crashBlocked(wire, fp)) return { result: 'crash_loop' };
+    return r;
+  }
+
+  // A lobby this brain spawned died before its first heartbeat (`why`: how). The limit-th in a row blocks its protocol.
+  function recordEarlyDeath(lobby, why) {
+    const key = protocolKey(lobby.wire, lobby.fp);
+    const c = crashes.get(key) || { early: 0, blockedUntil: null, last: '' };
+    c.early++;
+    c.last = why;
+    crashes.set(key, c);
+    logger.error(`[match] lobby ${lobby.id} (wire ${lobby.wire} fp ${lobby.fp}) died before its first heartbeat: ${why} `
+      + `(${c.early} in a row)`);
+    if (c.early >= crashLoopLimit && c.blockedUntil === null) {
+      c.blockedUntil = now() + crashCooldownMs;
+      logger.error(`[match] CRASH LOOP: wire ${lobby.wire} fp ${lobby.fp}: ${c.early} lobbies in a row died before their `
+        + `first heartbeat (last: ${why}). Not spawning it for ${Math.round(crashCooldownMs / 1000)} s; its players get `
+        + `SERVER_BEHIND. Read its lobby logs, then fix or withdraw the binary.`);
+    }
+  }
+
+  // The spawned process ended (host.start's onExit; only while this brain is the one that spawned it).
+  function serverExited(lobby, code, sig) {
+    return locked(async () => {
+      if (lobbies.get(lobby.id) !== lobby) return;
+      const how = sig ? `killed by ${sig}` : `exited with status ${code}`;
+      if (!lobby.heartbeated) recordEarlyDeath(lobby, how);
+      await endLobby(lobby, `its server ${how}`);
+    });
   }
 
   // Spawns a lobby for `entry` (a manifest entry). Resolves the lobby, null when no port is free, or false when the
@@ -176,7 +239,12 @@ function createMatchRegistry({
     const args = serverArgs({ port, lobbyId: id, netEnv: env.ENV, brainUrl, privateCode });
     const childKeys = { RJ_JOIN_KEY: env.JOIN_KEY, RJ_LOBBY_KEY: deriveLobbyKey(env.LOBBY_MASTER_KEY, id) };
     try {
-      lobby.pid = await host.start({ binary: entry.path, args, env: childEnv(childKeys), lobbyId: id });
+      lobby.pid = await host.start({
+        binary: entry.path, args, env: childEnv(childKeys), lobbyId: id,
+        onExit: (code, sig) => {
+          serverExited(lobby, code, sig).catch((e) => logger.error(`[match] lobby ${id} exit: ${e.message}`));
+        },
+      });
     } catch (e) {
       lobbies.delete(id);
       logger.error(`[match] could not start ${entry.path} for wire ${entry.wire} fp ${entry.fp}: ${e.message}`);
@@ -328,7 +396,7 @@ function createMatchRegistry({
         const l = bestPublicLobby(t.wire, t.fp);
         if (l) admit(t, l);
       } else if (t.target.type === 'create' && portsLeft) {
-        const route = routeProtocol(readEntries(), { wire: t.wire, fp: t.fp, minWire: config().gates.min_wire });
+        const route = routeFor(readEntries(), t.wire, t.fp);
         if (route.result !== 'ok') { fail(t, route.result === 'update_required' ? 'UPDATE_REQUIRED' : 'SERVER_BEHIND'); continue; }
         const l = await spawnLobby(route.entry, newCode());
         if (l === false) { fail(t, 'INTERNAL'); continue; }
@@ -352,7 +420,7 @@ function createMatchRegistry({
     }
     for (const [k, n] of need) {
       const [wire, fp] = [Number(k.split(':')[0]), k.split(':')[1]];
-      const route = routeProtocol(readEntries(), { wire, fp, minWire: config().gates.min_wire });
+      const route = routeFor(readEntries(), wire, fp);
       if (route.result !== 'ok') {
         for (const t of tickets.values()) {
           if (isWaiting(t) && t.target.type === 'public' && t.wire === wire && t.fp === fp) {
@@ -384,7 +452,7 @@ function createMatchRegistry({
   // {result:'ok', data} | {result:'queued', queued} | {result:'error', code, opts}.
   function join(p) {
     return locked(async () => {
-      const route = routeProtocol(manifest.read(), { wire: p.wire, fp: p.fp, minWire: config().gates.min_wire });
+      const route = routeFor(manifest.read(), p.wire, p.fp);
       if (route.result === 'update_required') return err('UPDATE_REQUIRED', { scope: 'multiplayer' });
       releasePlayer(p.uid);
       const who = { uid: p.uid, uname: p.uname, install: p.install, wire: p.wire, fp: p.fp };
@@ -537,6 +605,11 @@ function createMatchRegistry({
       return err('VALIDATION', { message: 'That heartbeat does not match this lobby.', status: 409 });
     }
     const wasState = lobby.state;
+    if (!lobby.heartbeated) {
+      lobby.heartbeated = true;
+      // A server of this protocol booted: whatever early deaths came before were not a loop.
+      crashes.delete(protocolKey(lobby.wire, lobby.fp));
+    }
     lobby.lastHeartbeat = now();
     lobby.state = b.state;
     lobby.bots = b.bots || 0;
@@ -607,8 +680,16 @@ function createMatchRegistry({
       logger.info(`[match] adoption window closed: ${lobbies.size} lobbies, ${strays.length} strays stopped`);
     }
 
+    if (t - lastLogMaintenance >= LOG_MAINTENANCE_MS && typeof host.maintainLogs === 'function') {
+      lastLogMaintenance = t;
+      const r = host.maintainLogs();
+      if (r && (r.rotated || r.deleted)) logger.info(`[match] server logs: ${r.rotated} capped, ${r.deleted} deleted`);
+    }
+
     for (const lobby of [...lobbies.values()]) {
       if (t - lobby.lastHeartbeat > HEARTBEAT_TIMEOUT_MS) {
+        // A server that hangs (or dies unseen, after a brain restart) before its first heartbeat is an early death too.
+        if (!lobby.heartbeated && !lobby.adopted) recordEarlyDeath(lobby, 'no heartbeat within 45 s of its spawn');
         await endLobby(lobby, 'no heartbeat for 45 s');
         continue;
       }
@@ -666,10 +747,11 @@ function createMatchRegistry({
     // Tests and diagnostics.
     get lobbies() { return lobbies; },
     get tickets() { return tickets; },
+    get crashes() { return crashes; },
   };
 }
 
 module.exports = {
   createMatchRegistry, brainUrlFor, MAX_PLAYERS, BOOT_GRACE_MS, HEARTBEAT_TIMEOUT_MS, EMPTY_LOBBY_MS, SEAT_RESERVATION_MS,
-  ADMITTED_HOLD_MS, TICKET_TTL_MS, POLL_MS, BOOT_POLL_MS, LOBBY_ID_RE, CODE_RE,
+  ADMITTED_HOLD_MS, TICKET_TTL_MS, POLL_MS, BOOT_POLL_MS, LOBBY_ID_RE, CODE_RE, CRASH_LOOP_LIMIT, CRASH_COOLDOWN_MS,
 };

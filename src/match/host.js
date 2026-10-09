@@ -41,9 +41,20 @@ function serverArgs({ port, lobbyId, netEnv, brainUrl, privateCode }) {
   return args;
 }
 
+// The game server is started through /bin/sh, which sets RLIMIT_CORE to 0 (soft and hard) and execs it: the same pid
+// and command line, and no core dump. A crash-looping server once wrote a ~21 MB core every 45 s on the shared box
+// (2026-10-09). Node has no rlimit option for spawn(), on Node 20 or since.
+const NO_CORE_WRAPPER = ['-c', 'ulimit -c 0 && exec "$0" "$@"'];
+
+// [command, argv] that runs <binary> <args> with no core dump. Pure.
+function noCoreCommand(binary, args) {
+  return ['/bin/sh', [...NO_CORE_WRAPPER, binary, ...args]];
+}
+
 // Starts one game server, detached (pm2 runs the brain with treekill: false, so a brain restart leaves it running).
-// logFile: optional; stdout and stderr are appended there, else discarded. Resolves the pid.
-function startServer({ binary, args, env, logFile = null }) {
+// logFile: optional; stdout and stderr are appended there, else discarded. onExit(code, signal): optional, called once
+// when the process ends, if this brain is still running then. Resolves the pid.
+function startServer({ binary, args, env, logFile = null, onExit = null }) {
   return new Promise((resolve, reject) => {
     let out = 'ignore';
     if (logFile) {
@@ -55,7 +66,10 @@ function startServer({ binary, args, env, logFile = null }) {
     }
     let child;
     try {
-      child = spawn(binary, args, { detached: true, stdio: ['ignore', out, out], env, cwd: path.dirname(binary) });
+      // The wrapper would start even with no binary to exec: refuse a missing or non-executable one here, as spawn() did.
+      fs.accessSync(binary, fs.constants.X_OK);
+      const [command, argv] = noCoreCommand(binary, args);
+      child = spawn(command, argv, { detached: true, stdio: ['ignore', out, out], env, cwd: path.dirname(binary) });
     } catch (e) {
       reject(e);
       return;
@@ -64,6 +78,7 @@ function startServer({ binary, args, env, logFile = null }) {
     }
     child.once('error', reject);
     if (!child.pid) return;
+    if (onExit) child.once('exit', (code, sig) => onExit(code, sig));
     child.unref();
     resolve(child.pid);
   });
@@ -114,13 +129,75 @@ function signal(pid, sig = 'SIGTERM') {
   }
 }
 
+// --- the per-lobby logs ------------------------------------------------------------------------------------------
+// Each game server's stdout and stderr go to <logDir>/lobby-<id>.log, opened for append. The brain caps them: a log
+// past maxBytes is copied to lobby-<id>.log.1 and truncated in place (copytruncate: the server keeps writing to the
+// same file, and O_APPEND puts its next line at the new end), so one lobby holds at most twice maxBytes. Logs older
+// than maxAgeMs, and all but the newest maxFiles lobbies, are deleted.
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
+const LOG_MAX_FILES = 200;
+const LOG_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+const LOG_RE = /^lobby-[A-Za-z0-9_-]+\.log(\.1)?$/;
+
+// Caps and prunes logDir. Never throws; resolves {rotated, deleted} counts.
+function maintainLogs(logDir, { maxBytes = LOG_MAX_BYTES, maxFiles = LOG_MAX_FILES, maxAgeMs = LOG_MAX_AGE_MS, now = Date.now() } = {}) {
+  const out = { rotated: 0, deleted: 0 };
+  let names;
+  try {
+    names = fs.readdirSync(logDir).filter((n) => LOG_RE.test(n));
+  } catch (e) {
+    return out;
+  }
+  const lobbies = new Map();
+  for (const n of names) {
+    const file = path.join(logDir, n);
+    let st;
+    try { st = fs.statSync(file); } catch (e) { continue; }
+    const id = n.replace(/\.log(\.1)?$/, '');
+    const l = lobbies.get(id) || { files: [], mtime: 0 };
+    l.files.push(file);
+    l.mtime = Math.max(l.mtime, st.mtimeMs);
+    lobbies.set(id, l);
+    if (!n.endsWith('.log') || st.size <= maxBytes) continue;
+    try {
+      fs.copyFileSync(file, `${file}.1`);
+      fs.truncateSync(file, 0);
+      out.rotated++;
+    } catch (e) {
+      log.warn(`[host] cannot cap ${file}: ${e.message}`);
+    }
+  }
+  const byAge = [...lobbies.values()].sort((a, b) => b.mtime - a.mtime);
+  byAge.forEach((l, i) => {
+    if (i < maxFiles && now - l.mtime <= maxAgeMs) return;
+    for (const f of l.files) {
+      try { fs.unlinkSync(f); out.deleted++; } catch (e) { /* gone already */ }
+    }
+  });
+  return out;
+}
+
 // The real box. serversDir and brainUrl scope which processes are ours: nothing else is ever signalled.
-function createHost({ serversDir, brainUrl = null, logDir = null }) {
+function createHost({ serversDir, brainUrl = null, logDir = null, logLimits = {} }) {
+  if (logDir) {
+    try {
+      fs.mkdirSync(logDir, { recursive: true, mode: 0o750 });
+    } catch (e) {
+      log.warn(`[host] cannot create SERVER_LOGS_DIR ${logDir}: ${e.message}; game servers' output is discarded`);
+    }
+  }
   return {
     portFree: udpPortFree,
-    start({ binary, args, env, lobbyId }) {
+    start({ binary, args, env, lobbyId, onExit = null }) {
       const logFile = logDir ? path.join(logDir, `lobby-${lobbyId}.log`) : null;
-      return startServer({ binary, args, env, logFile });
+      return startServer({ binary, args, env, logFile, onExit });
+    },
+    // Called from the registry's sweep, at most once a minute.
+    maintainLogs() {
+      return logDir ? maintainLogs(logDir, logLimits) : { rotated: 0, deleted: 0 };
+    },
+    logFile(lobbyId) {
+      return logDir ? path.join(logDir, `lobby-${lobbyId}.log`) : null;
     },
     async ownServers() {
       return ownServers(await listProcesses(), serversDir, brainUrl);
@@ -135,4 +212,7 @@ function createHost({ serversDir, brainUrl = null, logDir = null }) {
   };
 }
 
-module.exports = { createHost, udpPortFree, childEnv, serverArgs, startServer, listProcesses, ownServers, PASSED_ENV };
+module.exports = {
+  createHost, udpPortFree, childEnv, serverArgs, startServer, listProcesses, ownServers, noCoreCommand, maintainLogs,
+  PASSED_ENV, LOG_MAX_BYTES, LOG_MAX_FILES, LOG_MAX_AGE_MS,
+};

@@ -52,7 +52,7 @@ test('a new environment spells out its ports and binds loopback by default', () 
   assert.equal(env.SESSION_KEY, KEY);
   assert.equal(env.SERVERS_DIR, '/opt/rj/dev/servers');
   assert.equal(env.SERVER_BINARY, null, 'a new environment runs binaries from the manifest, never SERVER_BINARY');
-  assert.equal(env.SERVER_LOGS_DIR, null);
+  assert.equal(env.SERVER_LOGS_DIR, '/opt/rj/dev/logs/servers', 'a new environment keeps its servers\' output by default');
   assert.ok(Object.isFrozen(env));
 });
 
@@ -96,4 +96,16 @@ test('an empty MYSQL_PASSWORD is allowed, a missing one is not', () => {
   const { MYSQL_PASSWORD, ...noPassword } = MYSQL;
   assert.throws(() => loadMysqlEnv(noPassword), /MYSQL_PASSWORD is required/);
   assert.equal(loadMysqlEnv({ ...MYSQL, MYSQL_PORT: '3307' }).port, 3307);
+});
+
+test('SERVER_LOGS_DIR: off discards, a relative path is refused, the legacy brain keeps none', () => {
+  const base = {
+    ...MYSQL, ENV: 'alpha', PUBLIC_PORT: '3002', INTERNAL_PORT: '3102', GAME_PORTS: '8090', GAME_HOST: 'h',
+    SESSION_KEY: KEY, JOIN_KEY: 'cd'.repeat(32), LOBBY_MASTER_KEY: 'ef'.repeat(32), SERVERS_DIR: '/opt/rj/alpha/servers',
+  };
+  assert.equal(loadEnv(base).SERVER_LOGS_DIR, '/opt/rj/alpha/logs/servers');
+  assert.equal(loadEnv({ ...base, SERVER_LOGS_DIR: '/var/log/rj/' }).SERVER_LOGS_DIR, '/var/log/rj');
+  assert.equal(loadEnv({ ...base, SERVER_LOGS_DIR: 'off' }).SERVER_LOGS_DIR, null);
+  assert.ok(problems({ ...base, SERVER_LOGS_DIR: 'logs' }).some((p) => p.includes('SERVER_LOGS_DIR must be an absolute path')));
+  assert.equal(loadEnv({ ...MYSQL }).SERVER_LOGS_DIR, null);
 });

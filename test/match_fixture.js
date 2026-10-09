@@ -28,12 +28,20 @@ function fakeHost() {
     busy: new Set(),
     running: new Map(),
     async portFree(p) { return !h.busy.has(p); },
-    async start({ binary, args, env, lobbyId }) {
+    async start({ binary, args, env, lobbyId, onExit = null }) {
       const pid = nextPid++;
-      h.started.push({ binary, args, env, lobbyId, pid });
+      h.started.push({ binary, args, env, lobbyId, pid, onExit });
       h.running.set(lobbyId, pid);
       return pid;
     },
+    // The process of lobby <lobbyId> ends as a crash would: what host.start's onExit hears.
+    exit(lobbyId, code = null, sig = 'SIGSEGV') {
+      const s = h.started.find((x) => x.lobbyId === lobbyId);
+      h.running.delete(lobbyId);
+      return s && s.onExit ? s.onExit(code, sig) : undefined;
+    },
+    maintained: 0,
+    maintainLogs() { h.maintained++; return { rotated: 0, deleted: 0 }; },
     async ownServers() { return [...h.running].map(([lobbyId, pid]) => ({ lobbyId, pid, args: '' })); },
     async stop(lobbyId) {
       h.stopped.push(lobbyId);

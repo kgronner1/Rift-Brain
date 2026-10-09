@@ -210,7 +210,27 @@ with `RJ_JOIN_KEY` and `RJ_LOBBY_KEY` in its environment (never argv), its worki
 else of the brain's environment but `PATH HOME USER LANG LC_ALL TMPDIR`. Its states come from its heartbeats
 (`BOOTING`, `PREGAME`, `INGAME`, `POSTGAME`); only `PREGAME` takes players. Capacity is seated humans + reservations +
 bots < 4. A join token's seat is reserved for 60 s; `player-joined` seats it, `player-left` frees it. A lobby with no
-heartbeat for 45 s is stopped; an empty one ends after `POSTGAME`, or after 120 s empty in `PREGAME` or `INGAME`.
+heartbeat for 45 s is stopped; an empty one ends after `POSTGAME`, or after 120 s empty in `PREGAME` or `INGAME`. A
+lobby whose server process exits ends at once (the brain hears it while it is the process's parent).
+
+**A crashing server** (2026-10-09: wire 2 SIGSEGV'd at boot before printing a line, and the brain respawned it every
+45 s, each crash dumping a ~21 MB core on the shared box) is held three ways:
+
+- **No core dumps.** A server is spawned as `/bin/sh -c 'ulimit -c 0 && exec "$0" "$@"' <binary> <args>`: soft and
+  hard `RLIMIT_CORE` 0, then the shell execs the binary, so the pid and the command line are the server's own. Node has
+  no rlimit option for `spawn()`. With systemd-coredump as the kernel's `core_pattern`, a crash is still logged to the
+  journal, but no core is stored ("Resource limits disable core dumping").
+- **Its output is kept**, in `SERVER_LOGS_DIR/lobby-<id>.log` (stdout and stderr, appended). A new environment
+  defaults to `/opt/rj/<ENV>/logs/servers` (`provision.sh` makes it; the brain makes it too, or warns and discards);
+  `SERVER_LOGS_DIR=off` discards, as the legacy brain does. Once a minute the sweep caps them: a log past 5 MB is copied
+  to `lobby-<id>.log.1` and truncated in place (the server writes with `O_APPEND`, so its next line lands at the new
+  start), and every lobby log older than 7 days, or beyond the newest 200 lobbies, is deleted.
+- **The crash-loop breaker.** Three lobbies of one `(wire, fp)` in a row that die before their first heartbeat (an exit
+  the brain sees, or 45 s without one) stop that protocol spawning for 10 minutes: its `quickplay` and
+  `create_private` answer `SERVER_BEHIND`, a player already waiting for it is told the same, and the brain logs
+  `[match] CRASH LOOP: wire <N> fp <fp> ...` at error. Each early death is logged with how it died. After the
+  cool-down one spawn is tried; one more early death blocks it again at once. Any heartbeat from a server of that
+  protocol clears the count. Read `lobby-<id>.log`, then fix the binary (`deploy_server.sh --replace`) or withdraw it.
 
 **The lobby-wait queue** is the `lobby` kind of spec 4.2's `queued`: FIFO, `poll_after_ms` 3000 ± 20% (1000 ± 20%
 while the lobby boots or the brain is adopting), `expires_in_sec` 60 (each poll renews it), capped at
@@ -232,7 +252,8 @@ heartbeat). `match/results` takes today's array and answers `{players, ignored_u
 
 **Tests.** `test/manifest.test.js`, `test/match_registry.test.js`, `test/match_http.test.js` (every
 `/v1/match/join` outcome), `test/internal_http.test.js` (the lobby key, adoption after a restart, the seat checks)
-and `test/match_host.test.js` (a real spawn and UDP test) need no database; `test/internal.db.test.js` writes match
+`test/match_host.test.js` (a real spawn and UDP test), `test/crash_loop.test.js` (the breaker) and
+`test/server_crash_guards.test.js` (a real spawn's core limit, its exit and its log; the log cap) need no database; `test/internal.db.test.js` writes match
 results against one.
 
 
