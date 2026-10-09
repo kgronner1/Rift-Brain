@@ -11,16 +11,25 @@
 #
 # Both modes first check the box (preflight), and warn when under 250 MB of memory is available (RJ_MIN_AVAILABLE_MB).
 #
+# Node (RJ 477): dev and alpha run on Node 20 (/usr/bin/node-20, AL2023's nodejs20), installed beside the system node.
+# The system node (16) stays the default `node`: pm2 runs on it, and so does the legacy rift-brain, which is never
+# restarted. Only this environment's app moves, through its ecosystem file's `interpreter`.
+#
 # What --apply does, for <env>:
+#   0. nodejs20 + nodejs20-npm with dnf, if missing, with the packages' scriptlets off: their only job is to register
+#      node-20 in the alternatives, which would repoint /usr/bin/npm, /usr/bin/npx and /etc/npmrc (and /usr/bin/node,
+#      where that is a symlink) at Node 20 under the legacy brain. Refuses if the default node, npm or npx moved
 #   1. Caddy (pinned release binary, checksum-verified) + its systemd unit; /etc/caddy/sites/<env>.caddy proxies
 #      <api host> -> 127.0.0.1:<public port>, and answers 503 NET_UNREACHABLE when the brain is down
-#   2. /opt/rj/<env>/{brain,servers,logs}; brain is a Rift-Brain checkout at <commit>, npm ci --omit=dev
+#   2. /opt/rj/<env>/{brain,servers,logs}; brain is a Rift-Brain checkout at <commit>, npm ci --omit=dev with Node 20's
+#      npm on Node 20 (again whenever node_modules was installed by another Node)
 #   3. /opt/rj/<env>/brain/.env, only if absent (chmod 600, keys from openssl rand; they never leave the box); an
 #      existing one gains only the M4 settings it lacks (JOIN_KEY, LOBBY_MASTER_KEY, INTERNAL_PORT, SERVERS_DIR,
 #      GAME_HOST), and its existing lines are never changed
 #   4. the database rift_brain_<env> and its user (grants on that database only); dev is a dump-and-load copy
 #      of rift_brain, then migrate --baseline && migrate; alpha is built fresh by migrate
-#   5. pm2 app rift-brain-<env> (treekill: false), pm2 save
+#   5. pm2 app rift-brain-<env> (treekill: false, interpreter /usr/bin/node-20), pm2 save. A changed ecosystem file (a
+#      new interpreter included) restarts this app alone: pm2 delete + start --only it. The plan says when it will
 #   6. checks: the brain answers on 127.0.0.1 (public and internal listeners), and through Caddy over HTTPS; reports
 #      what the per-protocol manifest (servers/manifest.json, written by Wobble Planet's deploy_server.sh) deploys
 #
@@ -33,7 +42,7 @@ set -euo pipefail
 
 CADDY_VERSION=2.11.7
 DOMAIN=riftjumpers.space
-REPO_URL=https://github.com/kgronner1/Rift-Brain.git
+REPO_URL="${RJ_REPO_URL:-https://github.com/kgronner1/Rift-Brain.git}"
 RJ_ROOT="${RJ_ROOT:-/opt/rj}"
 LEGACY_DB=rift_brain
 LEGACY_APP=rift-brain
@@ -48,8 +57,15 @@ ENV_NAME=""
 REF=""
 APPLY=0
 RECOPY=0
+# The Node this environment runs on (RJ 477), beside the system node. RJ_NODE_BIN / RJ_NPM_BIN stand in for them in
+# infra/test/provision_db.sh, which runs on a Mac; RJ_TODAY stands in for the date the end-of-life check reads.
+NODE_MAJOR=20
+NODE_PKGS=("nodejs$NODE_MAJOR" "nodejs$NODE_MAJOR-npm")
+NODE_BIN="${RJ_NODE_BIN:-/usr/bin/node-$NODE_MAJOR}"
+NPM_BIN="${RJ_NPM_BIN:-/usr/bin/npm-$NODE_MAJOR}"
+TODAY="${RJ_TODAY:-$(date -u +%F)}"
 # Steps a test can switch off (infra/test/provision_db.sh runs the database step alone).
-STEPS="${RJ_PROVISION_STEPS:-preflight memory caddy layout brain dotenv database pm2 verify}"
+STEPS="${RJ_PROVISION_STEPS:-preflight memory node caddy layout brain dotenv database pm2 verify}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -108,13 +124,19 @@ step_preflight() {
   local missing=()
   for c in node npm pm2 git openssl curl tar sha512sum systemctl; do command -v "$c" >/dev/null || missing+=("$c"); done
   [ "${#missing[@]}" = 0 ] || die "missing on the box: ${missing[*]}"
-  say "node $(node -v), npm $(npm -v), pm2 $(pm2 -v 2>/dev/null | tail -n 1)"
-  local major
-  major="$(node -p 'process.versions.node.split(".")[0]')"
-  # 16 is what the box has (and what the legacy brain runs on); the brain's runtime code and dependencies load on
-  # 16.20.2. Node 16 is past end of life: the upgrade is RJ 477.
-  [ "$major" -ge 16 ] || die "node $(node -v) is too old; the brain needs 16 or newer"
-  [ "$major" -ge 18 ] || say "WARNING: node $(node -v) is past end of life (RJ 477)"
+  # The system node is pm2's and the legacy brain's, not this environment's: reported, never judged.
+  say "system node $(node -v) ($(readlink -f "$(command -v node)")), npm $(npm -v), pm2 $(pm2 -v 2>/dev/null | tail -n 1): pm2 and $LEGACY_APP run on it; $APP does not"
+  if [ -x "$NODE_BIN" ]; then
+    local v major
+    v="$("$NODE_BIN" -v)"
+    major="$(node_major "$NODE_BIN")"
+    [ "$major" -ge "$NODE_MAJOR" ] || die "$NODE_BIN is node $v; $APP needs $NODE_MAJOR or newer"
+    say "$APP runs on node $v ($NODE_BIN), npm $(npm_run -v)"
+    eol_check "$major" "node $v ($NODE_BIN, $APP's runtime)"
+  else
+    say "$APP will run on node $NODE_MAJOR ($NODE_BIN): not installed yet; --apply installs ${NODE_PKGS[*]}"
+    eol_check "$NODE_MAJOR" "node $NODE_MAJOR ($APP's runtime)"
+  fi
   admin_sql 'SELECT 1' >/dev/null 2>&1 || die "cannot reach MariaDB as admin with: ${MYSQL_ADMIN[*]} (set RJ_MYSQL_ADMIN)"
   say "MariaDB $(admin_sql 'SELECT VERSION()')"
   [ "$(admin_sql "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='$LEGACY_DB'")" = 1 ] \
@@ -147,6 +169,30 @@ step_preflight() {
   fi
 }
 
+node_major() { "$1" -p 'process.versions.node.split(".")[0]'; }
+# npm run by this environment's node: the npm-20 script is started by node-20 itself whatever its #! line says, and
+# with a node-20 first on PATH for anything npm starts.
+NODE_SHIM=""
+npm_run() {
+  if [ -z "$NODE_SHIM" ]; then
+    NODE_SHIM="$(mktemp -d "${TMPDIR:-/tmp}/rj-node$NODE_MAJOR.XXXXXX")"
+    ln -s "$NODE_BIN" "$NODE_SHIM/node"
+    trap 'rm -rf "$NODE_SHIM"' EXIT
+  fi
+  PATH="$NODE_SHIM:$PATH" "$NODE_BIN" "$(readlink -f "$NPM_BIN")" "$@"
+}
+# Each LTS line's end of life (https://github.com/nodejs/release#release-schedule).
+node_eol() {
+  case "$1" in 16) echo 2023-09-11 ;; 18) echo 2025-04-30 ;; 20) echo 2026-04-30 ;; 22) echo 2027-04-30 ;; 24) echo 2028-04-30 ;; esac
+}
+eol_check() { # eol_check <major> <what>
+  local eol
+  eol="$(node_eol "$1")"
+  [ -n "$eol" ] || return 0
+  [[ "$TODAY" > "$eol" ]] && say "WARNING: $2 is past end of life ($eol)"
+  return 0
+}
+
 # --- 0b. memory --------------------------------------------------------------------------------------------------
 # The box is small (949 MB on a t2.micro; spec 5). A warning, never a refusal: a tight box still works, but --apply's
 # npm ci and a new brain beside the others can push it into the OOM killer. RJ_MEM_AVAILABLE_MB stands in for free(1)
@@ -165,6 +211,39 @@ step_memory() {
   [[ "$avail" =~ ^[0-9]+$ ]] || { say "WARNING: could not read the available memory"; return 0; }
   if [ "$avail" -lt "$MIN_AVAILABLE_MB" ]; then
     say "WARNING: only $avail MB of memory available (under $MIN_AVAILABLE_MB MB). $APP needs ~70-100 MB, npm ci more, and each game server more again: stop something, add swap, or resize to a t3.small (spec 5) first"
+  fi
+}
+
+# --- 0c. Node 20 (RJ 477) -------------------------------------------------------------------------------------------
+# What the default node, npm and npx are: the legacy brain's and pm2's. Installing node 20 must leave them alone.
+default_node_state() {
+  local c
+  for c in node npm npx; do printf '%s=%s ' "$c" "$(readlink -f "$(command -v "$c")" 2>/dev/null || echo none)"; done
+  node -v 2>/dev/null || echo none
+}
+
+step_node() {
+  if [ -x "$NODE_BIN" ] && [ -x "$NPM_BIN" ]; then
+    say "node $NODE_MAJOR is installed: $NODE_BIN $("$NODE_BIN" -v), $NPM_BIN $(npm_run -v)"
+  elif [ "$APPLY" = 0 ]; then
+    plan "sudo dnf install ${NODE_PKGS[*]} with its scriptlets off (they would repoint /usr/bin/npm, /usr/bin/npx and /etc/npmrc at node $NODE_MAJOR); adds $NODE_BIN and $NPM_BIN, and the default node stays $(node -v)"
+    return
+  else
+    local before after
+    before="$(default_node_state)"
+    sudo dnf install -y -q --setopt=tsflags=noscripts --setopt=install_weak_deps=False "${NODE_PKGS[@]}"
+    sudo ldconfig
+    after="$(default_node_state)"
+    [ "$before" = "$after" ] || die "installing ${NODE_PKGS[*]} moved the default node/npm/npx (was: $before; now: $after). Put it back before anything restarts: infra/README.md, \"Node 20 (RJ 477)\""
+    [ -x "$NODE_BIN" ] && [ -x "$NPM_BIN" ] || die "${NODE_PKGS[*]} installed, but there is no $NODE_BIN / $NPM_BIN"
+    say "installed ${NODE_PKGS[*]}: $NODE_BIN $("$NODE_BIN" -v), npm $(npm_run -v); the default node is still $(node -v)"
+  fi
+  [ "$(node_major "$NODE_BIN")" -ge "$NODE_MAJOR" ] || die "$NODE_BIN is $("$NODE_BIN" -v), not node $NODE_MAJOR"
+  # A nodejs20 that someone installed by hand, scriptlets on, may have taken npm from the system node.
+  local npm_real
+  npm_real="$(readlink -f "$(command -v npm)" 2>/dev/null || true)"
+  if [[ "$npm_real" == */nodejs$NODE_MAJOR/* ]] && [ "$(node_major node)" != "$NODE_MAJOR" ]; then
+    say "WARNING: the default npm is node $NODE_MAJOR's ($npm_real) while the default node is $(node -v): the nodejs$NODE_MAJOR alternatives took it (infra/README.md, \"Node 20 (RJ 477)\")"
   fi
 }
 
@@ -256,8 +335,14 @@ step_brain() {
     if [ "$APPLY" = 1 ]; then git clone --quiet "$REPO_URL" "$BRAIN_DIR"; say "cloned $REPO_URL into $BRAIN_DIR"
     else plan "git clone $REPO_URL $BRAIN_DIR"; fi
   fi
+  # node_modules records the Node that installed it; a different one (the move off 16 included) installs again.
+  local marker="$BRAIN_DIR/node_modules/.rj-node-major" installed_by=""
+  [ -f "$marker" ] && installed_by="$(cat "$marker")"
   if [ "$APPLY" = 0 ]; then
-    plan "check out $REF (detached) in $BRAIN_DIR; npm ci --omit=dev"
+    local why=""
+    [ -d "$BRAIN_DIR/node_modules" ] && [ "$installed_by" != "$NODE_MAJOR" ] \
+      && why=" (node_modules was installed by ${installed_by:+node }${installed_by:-another node}: installs again)"
+    plan "check out $REF (detached) in $BRAIN_DIR; npm ci --omit=dev with $NPM_BIN on node $NODE_MAJOR when the commit changed$why"
     return
   fi
   git -C "$BRAIN_DIR" fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*'
@@ -266,8 +351,10 @@ step_brain() {
   before="$(git -C "$BRAIN_DIR" rev-parse HEAD 2>/dev/null || echo none)"
   git -C "$BRAIN_DIR" checkout --quiet --detach "$REF"
   BRAIN_COMMIT="$(git -C "$BRAIN_DIR" rev-parse HEAD)"
-  if [ "$before" != "$BRAIN_COMMIT" ] || [ ! -d "$BRAIN_DIR/node_modules" ]; then
-    (cd "$BRAIN_DIR" && npm ci --omit=dev --no-audit --no-fund --loglevel=error)
+  if [ "$before" != "$BRAIN_COMMIT" ] || [ ! -d "$BRAIN_DIR/node_modules" ] || [ "$installed_by" != "$NODE_MAJOR" ]; then
+    say "npm ci --omit=dev: npm $(npm_run -v) on node $("$NODE_BIN" -v)"
+    (cd "$BRAIN_DIR" && npm_run ci --omit=dev --no-audit --no-fund --loglevel=error)
+    echo "$NODE_MAJOR" >"$marker"
     BRAIN_CHANGED=1
   fi
   say "brain at $(git -C "$BRAIN_DIR" log -1 --format='%h %s' HEAD)"
@@ -428,32 +515,45 @@ step_database() {
   if [ "$APPLY" = 0 ]; then
     if [ "$DB_INIT" = copy ]; then plan "cd $BRAIN_DIR && npm run migrate -- --baseline (once) && npm run migrate"
     else plan "cd $BRAIN_DIR && npm run migrate (builds $DB_NAME from 0001)"; fi
-    if db_exists && [ -d "$BRAIN_DIR/node_modules" ] && [ -f "$DOTENV" ]; then
+    if db_exists && [ -d "$BRAIN_DIR/node_modules" ] && [ -f "$DOTENV" ] && [ -x "$NODE_BIN" ]; then
       say "migrate --status now:"
-      (cd "$BRAIN_DIR" && node src/migrate.js --status) | sed 's/^/    /' || true
+      (cd "$BRAIN_DIR" && "$NODE_BIN" src/migrate.js --status) | sed 's/^/    /' || true
     fi
     return
   fi
   if [ "$DB_INIT" = copy ] && ! baselined; then
-    (cd "$BRAIN_DIR" && node src/migrate.js --baseline)
+    (cd "$BRAIN_DIR" && "$NODE_BIN" src/migrate.js --baseline)
   fi
-  (cd "$BRAIN_DIR" && node src/migrate.js)
+  (cd "$BRAIN_DIR" && "$NODE_BIN" src/migrate.js)
   [ "$copied" = 0 ] || say "the copy is baselined and migrated"
   [ "$copied" = 0 ] || say "WARNING: $DB_NAME now holds real player data; scrub it before anyone else uses dev (README.md, \"Player data outside production\")"
 }
 
 # --- 5. pm2 ------------------------------------------------------------------------------------------------------
+# One field of this app in pm2's list ("" when it is not there): pm2_field <exec_interpreter|pid>.
+pm2_field() {
+  # shellcheck disable=SC2016 # the single quotes hold a node program, not shell expansions
+  pm2 jlist 2>/dev/null | node -e '
+    let s = ""; process.stdin.on("data", (d) => { s += d; }).on("end", () => {
+      let list = []; try { list = JSON.parse(s.slice(s.indexOf("["))); } catch (e) {}
+      const app = list.find((p) => p.name === process.argv[1]);
+      if (app) console.log(process.argv[2] === "pid" ? app.pid : app.pm2_env.exec_interpreter);
+    });' "$APP" "$1"
+}
+
 step_pm2() {
   local eco_tmp
   eco_tmp="$(mktemp)"
   cat >"$eco_tmp" <<EOF
 // Written by infra/box/provision.sh (RJ 463); a re-run overwrites it.
 // treekill: false -- restarting the brain must never take its game servers with it (spec 5).
+// interpreter -- node $NODE_MAJOR, beside the system node that pm2 and the legacy brain run on (RJ 477).
 module.exports = {
   apps: [{
     name: '$APP',
     cwd: '$BRAIN_DIR',
     script: 'src/app.js',
+    interpreter: '$NODE_BIN',
     treekill: false,
     autorestart: true,
     max_restarts: 20,
@@ -466,21 +566,34 @@ module.exports = {
   }],
 };
 EOF
-  local eco_changed=0
+  local eco_changed=0 running interp
   cmp -s "$eco_tmp" "$ECOSYSTEM" 2>/dev/null || eco_changed=1
+  interp="$(pm2_field exec_interpreter)"
+  # pm2 records "node" for an app started without an interpreter: the node pm2 itself runs on.
+  [ "$interp" != node ] || interp="node (pm2's own, $(node -v))"
+  running=0
+  [ -z "$(pm2_field pid)" ] || running=1
   if [ "$APPLY" = 0 ]; then
-    [ "$eco_changed" = 0 ] || plan "write $ECOSYSTEM"
-    if pm2 jlist 2>/dev/null | grep -q "\"name\":\"$APP\""; then plan "restart pm2 app $APP if its code or config changed"
-    else plan "pm2 start $ECOSYSTEM --only $APP; pm2 save"; fi
+    [ "$eco_changed" = 0 ] || plan "write $ECOSYSTEM (interpreter $NODE_BIN)"
+    if [ "$running" = 0 ]; then
+      plan "pm2 start $ECOSYSTEM --only $APP (on $NODE_BIN); pm2 save"
+    elif [ "$eco_changed" = 1 ] && [ "$interp" != "$NODE_BIN" ]; then
+      plan "RESTART $APP alone (pm2 delete $APP; pm2 start $ECOSYSTEM --only $APP): its interpreter changes from ${interp:-none} to $NODE_BIN. $LEGACY_APP and every other pm2 app keep running untouched"
+    elif [ "$eco_changed" = 1 ]; then
+      plan "RESTART $APP alone (pm2 delete + start --only $APP): its ecosystem file changed; nothing else restarts"
+    else
+      plan "$APP already runs on $NODE_BIN; restart it alone only if its code or .env changed"
+    fi
     rm -f "$eco_tmp"
     return
   fi
   [ "$eco_changed" = 0 ] || { mv "$eco_tmp" "$ECOSYSTEM"; say "wrote $ECOSYSTEM"; }
   rm -f "$eco_tmp"
-  if ! pm2 jlist 2>/dev/null | grep -q "\"name\":\"$APP\""; then
+  if [ "$running" = 0 ]; then
     pm2 start "$ECOSYSTEM" --only "$APP"
   elif [ "$eco_changed" = 1 ]; then
-    # A changed ecosystem file (treekill, paths) only takes effect on a fresh start of that one app.
+    # A changed ecosystem file (interpreter, treekill, paths) only takes effect on a fresh start of that one app.
+    say "restarting $APP alone: its ecosystem file changed (interpreter ${interp:-none} -> $NODE_BIN)"
     pm2 delete "$APP" >/dev/null
     pm2 start "$ECOSYSTEM" --only "$APP"
   elif [ "${BRAIN_CHANGED:-0}" = 1 ]; then
@@ -490,6 +603,16 @@ EOF
   fi
   pm2 save >/dev/null
   say "pm2 saved (the process list survives a reboot; $LEGACY_APP is in it as before)"
+  # Proof, not the ecosystem's say-so: the running process's own executable. /proc is Linux's; elsewhere, skipped.
+  [ -d /proc/self ] || return 0
+  local pid exe=""
+  for _ in $(seq 1 10); do
+    pid="$(pm2_field pid)"
+    [ -n "$pid" ] && [ "$pid" != 0 ] && exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)" && [ -n "$exe" ] && break
+    sleep 1
+  done
+  [ "$exe" = "$(readlink -f "$NODE_BIN")" ] || die "$APP (pid ${pid:-none}) runs ${exe:-nothing}, not $NODE_BIN"
+  say "PASS $APP (pid $pid) runs on $NODE_BIN $("$NODE_BIN" -v)"
 }
 
 # --- 6. checks ---------------------------------------------------------------------------------------------------
@@ -555,7 +678,7 @@ step_verify() {
   else say "WARNING: https://$API_HOST/ does not answer yet. DNS (rj-box) must point here and TCP 80/443 be open; see journalctl -u caddy"; fi
 }
 
-for s in preflight memory caddy layout brain dotenv database pm2 verify; do
+for s in preflight memory node caddy layout brain dotenv database pm2 verify; do
   step_on "$s" || continue
   "step_$s"
 done

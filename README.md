@@ -164,8 +164,10 @@ RJ_TEST_DB=mysql://root:pw@127.0.0.1:33306/rj_migrate_test npm test
 docker rm -f rb-test-db
 ```
 
-The box runs Node 16: runtime code uses no global `fetch` (the config fetcher is `https.get`). Tests may use newer
-Node.
+Dev and alpha run on Node 20 (RJ 477, infra/README.md, "Node 20 (RJ 477)"); the legacy brain still runs on Node 16,
+so runtime code uses no global `fetch` until cutover (the config fetcher is `https.get`). Tests may use newer Node.
+On Node 20.12.2 (the box's), `test/v1_http.test.js`'s gate test fails in its own `fetch` client (that undici
+retries a 421 and then reports `UND_ERR_REQ_CONTENT_LENGTH_MISMATCH`); the brain answers it correctly, and 20.20 passes.
 
 
 ## Matchmaking (RJ 466, spec M4)

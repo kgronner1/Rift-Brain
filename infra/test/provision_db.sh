@@ -54,6 +54,7 @@ make_brain alpha
 
 provision() {
   RJ_ROOT="$WORK/rj" RJ_PROVISION_STEPS="dotenv database" RJ_MYSQL_PORT="$PORT" RJ_DB_USER_HOSTS="%" \
+    RJ_NODE_BIN="$(command -v node)" \
     RJ_MYSQL_ADMIN="docker exec -i $NAME mariadb -uroot -p$PW" \
     RJ_MYSQLDUMP_ADMIN="docker exec -i $NAME mariadb-dump -uroot -p$PW" \
     bash "$REPO_DIR/infra/box/provision.sh" --ref test "$@"
