@@ -59,12 +59,46 @@ the brain then matches through `/v1/match/join` and runs the binaries `/opt/rj/d
 Wobble Planet's `deploy_server.sh --env dev` uploads (the root README, "Matchmaking"). A re-run of step 6 at an M4
 commit appends to an older `.env` only the M4 settings it lacks, and reports what the manifest deploys.
 
+## The alpha stand-up, in order (RJ 469, spec M7)
+
+Alpha sits beside dev on the same box and Caddy: `api.riftjumpers.space` -> `127.0.0.1:3002` (internal 3102),
+`/opt/rj/alpha/`, its own `.env` and keys, `rift_brain_alpha` **built fresh from migrations** (no player data, ever
+copied in) with its own user, pm2 `rift-brain-alpha` (`treekill: false`), UDP 8090-8099. The edge stacks, the DNS
+record `api` and the security group's 8090-8099 already exist from the dev stand-up. This is **not** the cutover
+(spec 7): no build points at alpha until one is made to, and the legacy brain is untouched.
+
+| # | Command | Changes | Undo |
+|---|---|---|---|
+| 0 | (recommended, Alex) resize the box to a t3.small | 2 GB instead of 949 MB (spec 5). A stop/start changes the public IP: re-run `bash infra/deploy_stacks.sh --apply --box-only` after | resize back |
+| 1 | `bash ops/config/publish.sh alpha --dry-run` | nothing (every check, the client's parser, the document, the commands) | -- |
+| 2 | `bash ops/config/publish.sh alpha` | uploads `alpha/client.v1.json` (serial 1); https://config.riftjumpers.space/alpha/client.v1.json | "Undo", step 4 |
+| 3 | `bash infra/provision_box.sh --env alpha` | nothing on the box (plan: preflight, memory, what --apply would do) | -- |
+| 4 | `bash infra/provision_box.sh --env alpha --apply` | the box: `/etc/caddy/sites/alpha.caddy` (+ reload), `/opt/rj/alpha/`, its `.env` (fresh keys), `rift_brain_alpha` (0001 + 0002, empty) and its user, pm2 `rift-brain-alpha`, `pm2 save` | "Undo", step 4 |
+| 5 | in Wobble Planet, on a clean `main`: `bash deploy_server.sh --env alpha` | `/opt/rj/alpha/servers/wire-<N>-<fp>/` and `manifest.json` | `deploy_server.sh --env alpha --withdraw <N>`, or "Undo", step 4 |
+
+Step 2 before step 4: the brain reads its document from boot (without one it runs on the compiled defaults, which
+are open). Step 4 runs this checkout's HEAD, which must be on GitHub (`--ref <commit>` names another). The preflight
+warns, and does not stop, when under 250 MB of memory is available: on a t2.micro beside dev and the legacy brain it
+will. Until step 5 every `/v1/match/join` on alpha answers `SERVER_BEHIND`.
+
 ## Undo
 
 Until cutover (spec 7a) nothing here touches the legacy brain, `rift_brain`, its binary, TCP 3000 or
 UDP 8080-8085, and today's builds never read any of it. Newest first:
 
-3. **The box** (step 6), over SSH:
+4. **Alpha** (its steps 2, 4 and 5), over SSH. Leaves dev and Caddy running:
+   ```
+   pm2 delete rift-brain-alpha && pm2 save
+   sudo rm -f /etc/caddy/sites/alpha.caddy && sudo systemctl reload caddy
+   sudo mysql -e "DROP DATABASE rift_brain_alpha; DROP USER 'rift_brain_alpha'@'localhost'; DROP USER 'rift_brain_alpha'@'127.0.0.1';"
+   sudo rm -rf /opt/rj/alpha
+   ```
+   and its document, from the Mac (nothing reads it until a build is pointed at alpha):
+   ```
+   aws --profile rj s3 rm s3://rj-config-<account>/alpha/client.v1.json
+   aws --profile rj cloudfront create-invalidation --distribution-id <id> --paths /alpha/client.v1.json
+   ```
+3. **The box** (step 6), over SSH (with alpha still up, skip `disable --now caddy`: it serves both):
    ```
    pm2 delete rift-brain-dev && pm2 save
    sudo systemctl disable --now caddy
