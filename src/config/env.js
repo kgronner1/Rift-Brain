@@ -144,10 +144,13 @@ function loadEnv(raw = process.env) {
     serversDir = String(raw.SERVERS_DIR).trim().replace(/\/+$/, '');
     if (!serversDir.startsWith('/')) problems.push('SERVERS_DIR must be an absolute path');
   }
-  let serverLogsDir = null;
+  // A new environment keeps each game server's output by default (a server that died before its first line once took
+  // the box down with nothing to read); SERVER_LOGS_DIR=off discards it, as the legacy brain does.
+  let serverLogsDir = legacy ? null : `/opt/rj/${env}/logs/servers`;
   if (!isBlank(raw.SERVER_LOGS_DIR)) {
     serverLogsDir = String(raw.SERVER_LOGS_DIR).trim().replace(/\/+$/, '');
-    if (!serverLogsDir.startsWith('/')) problems.push('SERVER_LOGS_DIR must be an absolute path');
+    if (serverLogsDir === 'off') serverLogsDir = null;
+    else if (!serverLogsDir.startsWith('/')) problems.push('SERVER_LOGS_DIR must be an absolute path (or off)');
   }
 
   let configUrl = null;
@@ -179,7 +182,7 @@ function loadEnv(raw = process.env) {
     GAME_PORTS: Object.freeze(gamePorts),
     SERVER_BINARY: legacy ? pick('SERVER_BINARY') : null,
     SERVERS_DIR: serversDir,
-    // Optional: each game server's stdout and stderr, as lobby-<id>.log. Unset: discarded, as the legacy brain does.
+    // Each game server's stdout and stderr, as lobby-<id>.log (match/host.js caps them). null: discarded.
     SERVER_LOGS_DIR: serverLogsDir,
     CONFIG_URL: configUrl,
   });

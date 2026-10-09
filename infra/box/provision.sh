@@ -21,7 +21,7 @@
 #      where that is a symlink) at Node 20 under the legacy brain. Refuses if the default node, npm or npx moved
 #   1. Caddy (pinned release binary, checksum-verified) + its systemd unit; /etc/caddy/sites/<env>.caddy proxies
 #      <api host> -> 127.0.0.1:<public port>, and answers 503 NET_UNREACHABLE when the brain is down
-#   2. /opt/rj/<env>/{brain,servers,logs}; brain is a Rift-Brain checkout at <commit>, npm ci --omit=dev with Node 20's
+#   2. /opt/rj/<env>/{brain,servers,logs,logs/servers} (the last: each game server's output); brain is a Rift-Brain checkout at <commit>, npm ci --omit=dev with Node 20's
 #      npm on Node 20 (again whenever node_modules was installed by another Node)
 #   3. /opt/rj/<env>/brain/.env, only if absent (chmod 600, keys from openssl rand; they never leave the box); an
 #      existing one gains only the M4 settings it lacks (JOIN_KEY, LOBBY_MASTER_KEY, INTERNAL_PORT, SERVERS_DIR,
@@ -323,7 +323,7 @@ step_caddy() {
 # --- 2. directories and the checkout -----------------------------------------------------------------------------
 step_layout() {
   local d
-  for d in "$RJ_ROOT" "$ENV_DIR" "$ENV_DIR/servers" "$ENV_DIR/logs"; do
+  for d in "$RJ_ROOT" "$ENV_DIR" "$ENV_DIR/servers" "$ENV_DIR/logs" "$ENV_DIR/logs/servers"; do
     if [ -d "$d" ]; then continue; fi
     if [ "$APPLY" = 1 ]; then sudo install -d -m 0755 -o "$BOX_USER" -g "$(id -gn)" "$d"; say "created $d"
     else plan "create $d (owner $BOX_USER)"; fi
