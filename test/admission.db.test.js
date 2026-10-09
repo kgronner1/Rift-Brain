@@ -131,7 +131,10 @@ test('a queued password login is granted by polling, and the grant is redeemed a
   assert.deepEqual(Object.keys(r.body.data).sort(), ['credential', 'session', 'user']);
   assert.equal(r.body.data.user.username, 'Adm_1');
   assert.equal(verifySession(r.body.data.session.token, { keyHex: KEY, env: 'dev', nowSec: nowSecFrom(ctx.now()) }).ok, true);
-  assert.equal(code(await call('GET', `/v1/queue/${ticket}`, { headers: as(1) })), 'QUEUE_TICKET_INVALID', 'redeemed: the ticket is done');
+  // Redeemed, the ticket still answers its grant until the grant's exp: the client polls until a session is issued.
+  const after = await call('GET', `/v1/queue/${ticket}`, { headers: as(1) });
+  assert.equal(code(after), 'ok', 'redeemed: a poll still answers the grant');
+  assert.equal(after.body.data.grant, grant);
 });
 
 test('a queued account creation is granted and redeemed at /v1/accounts', { skip }, async () => {

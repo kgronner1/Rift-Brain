@@ -251,8 +251,11 @@ restart.
   `clamp(eta_ms / 10, 2000, 30000) x [0.8, 1.2]`, per response. Position and eta never rise for a ticket.
 - **The grant.** `GET /v1/queue/:ticket` on a granted ticket answers `{grant}`: a token (`typ: "g"`, signed with
   `SESSION_KEY`, spec 4.8) naming the ticket and the install, valid `grant_ttl_sec`. Sent back as `grant` on
-  `/v1/session` or `/v1/accounts` from the same install, it admits the request and ends the ticket; it stays valid to its
-  `exp` for that install (a mistyped password does not cost the place). From another install, or forged, or of another
+  `/v1/session` or `/v1/accounts` from the same install, it admits the request; it stays valid to its `exp` for that
+  install (a mistyped password does not cost the place), and so does its ticket: polled again, a granted ticket answers
+  the same `{grant}` until it is redeemed and, once redeemed, until the grant's `exp`, when it is dropped (never
+  re-queued). The client polls a granted ticket until a session is issued, so this is what keeps a redemption the
+  database refused, or whose answer was lost, from costing the grant. From another install, or forged, or of another
   env: `QUEUE_TICKET_INVALID`. Expired: the request is queued again at its ticket's place. An unredeemed grant lapses
   and its ticket re-queues at the front.
 - **Off** (`enabled: false`) admits everyone at once; every waiting ticket is granted at its next poll or within a

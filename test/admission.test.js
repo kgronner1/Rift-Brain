@@ -169,8 +169,33 @@ test('a grant is redeemed by its install only; a foreign or forged one is QUEUE_
   assert.equal(a.gate({ install: install(1), grant: 42 }).code, 'QUEUE_TICKET_INVALID');
 
   assert.equal(a.gate({ install: install(1), grant }).result, 'admitted');
-  assert.equal(a.tickets.has(tk), false, 'redeemed: the ticket is done');
+  assert.equal(a.waiting.length, 0, 'redeemed: out of the line');
   assert.equal(a.gate({ install: install(1), grant }).result, 'admitted', 'valid to its exp for that install (a mistyped password)');
+});
+
+test('a granted ticket polled again answers the same {grant} until it is redeemed, and after, until the grant exp', () => {
+  // The client (Net.queue) re-polls a granted ticket every queue_poll_default_ms until a session is issued, so a
+  // redemption the database then refuses (a mistyped password) or whose answer is lost must not cost the grant.
+  const { a, run, advance } = setup({ rate_per_min: 3, burst: 1, grant_ttl_sec: 30 });
+  signIn(a, 0);
+  const tk = signIn(a, 1).queued.ticket;
+  signIn(a, 2);
+  run(21);
+  const grant = a.poll(tk, install(1)).data.grant;
+  for (let s = 0; s < 4; s++) {
+    advance(5000);
+    assert.deepEqual(a.poll(tk, install(1)), { result: 'ok', data: { grant } }, `re-poll ${s + 1}`);
+  }
+  assert.equal(a.gate({ install: install(1), grant }).result, 'admitted');
+  advance(5000);
+  assert.deepEqual(a.poll(tk, install(1)), { result: 'ok', data: { grant } }, 'redeemed: polls still answer the grant');
+  assert.equal(a.gate({ install: install(1), grant }).result, 'admitted', 'and it still redeems (the retyped password)');
+  run(10); // past the grant's exp
+  assert.equal(a.poll(tk, install(1)), null, 'a redeemed ticket is dropped at its grant exp (the route: QUEUE_TICKET_INVALID)');
+  assert.equal(a.tickets.has(tk), false);
+  assert.ok(!a.waiting.some((w) => w.id === tk));
+  assert.equal(signIn(a, 1).result, 'queued', 'a later sign-in with no grant takes a new place');
+  assert.notEqual(signIn(a, 1).queued.ticket, tk);
 });
 
 test('a grant still verifies after a restart lost the ticket (it is signed)', () => {

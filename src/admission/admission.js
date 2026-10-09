@@ -8,8 +8,10 @@
 //   nor carrying a valid grant answers `queued`. One ticket per install: asking again returns the same place.
 // - The sweep (every 1 s) grants tickets FIFO as tokens refill. A granted ticket's poll answers {grant}, an admission
 //   grant token (tokens.js) redeemable for grant_ttl_sec by the install it names. An unredeemed grant lapses and its
-//   ticket re-queues at the front. A redeemed grant ends its ticket; it stays valid to its exp for that install, so a
-//   mistyped password after a long wait does not send the player back to the end of the line.
+//   ticket re-queues at the front. A redeemed grant stays valid to its exp for that install, so a mistyped password
+//   after a long wait does not send the player back to the end of the line -- and so its ticket stays too, answering
+//   polls with the same {grant} until that exp, then is dropped (never re-queued: it was admitted). The client polls a
+//   granted ticket until a session is issued (Net.queue), and a QUEUE_TICKET_INVALID there would drop its grant.
 // - A ticket nobody polls for ticket_ttl_sec is dropped; every poll extends it.
 // - enabled: false admits everyone at once, and every waiting ticket is granted on its next poll or sweep.
 // - Position and eta never rise for a ticket (a lapsed grant re-queued at the front would otherwise push everyone
@@ -75,7 +77,7 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
     const tk = {
       id: `q_${crypto.randomBytes(16).toString('base64url')}`,
       kind: 'admission', install, createdAt: t, expiresAt: 0,
-      grant: null, grantExpSec: 0, lastPosition: Infinity, lastEta: Infinity,
+      grant: null, grantExpSec: 0, redeemed: false, lastPosition: Infinity, lastEta: Infinity,
     };
     touch(tk, t);
     tickets.set(tk.id, tk);
@@ -86,6 +88,10 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
 
   function touch(tk, t) {
     tk.expiresAt = t + settings().ticket_ttl_sec * 1000;
+  }
+
+  function redeemed(tk) {
+    tk.redeemed = true;
   }
 
   function grant(tk, t) {
@@ -99,9 +105,13 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
     tk.grantExpSec = g.payload.exp;
   }
 
-  // An unredeemed grant past its exp: the ticket goes back to the front of the line.
+  // A grant past its exp: an unredeemed one's ticket goes back to the front of the line, a redeemed one's is dropped.
   function lapseIfDue(tk, t) {
     if (tk.grant && nowSecFrom(t) >= tk.grantExpSec) {
+      if (tk.redeemed) {
+        drop(tk);
+        return true;
+      }
       tk.grant = null;
       tk.grantExpSec = 0;
       waiting.unshift(tk);
@@ -142,12 +152,12 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
       if (r) return r;
     }
 
-    const mine = install ? byInstall.get(install) : null;
+    let mine = install ? byInstall.get(install) : null;
+    if (mine && lapseIfDue(mine, t) && mine.redeemed) mine = null;
     if (mine) {
-      lapseIfDue(mine, t);
       if (mine.grant) {
         // This install already holds a grant: the request is the redemption.
-        drop(mine);
+        redeemed(mine);
         return { result: 'admitted' };
       }
       touch(mine, t);
@@ -169,12 +179,14 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
     if (!install || r.payload.install !== install) return { result: 'error', code: 'QUEUE_TICKET_INVALID' };
     const tk = tickets.get(r.payload.ticket);
     if (r.ok) {
-      if (tk && tk.install === install) drop(tk);
+      if (tk && tk.install === install && tk.grant) redeemed(tk);
       return { result: 'admitted' };
     }
-    if (tk && tk.install === install) {
-      lapseIfDue(tk, t);
-      if (tk.grant) return { result: 'admitted' };
+    if (tk && tk.install === install && !(lapseIfDue(tk, t) && tk.redeemed)) {
+      if (tk.grant) {
+        redeemed(tk);
+        return { result: 'admitted' };
+      }
       touch(tk, t);
       return { result: 'queued', queued: view(tk) };
     }
@@ -190,7 +202,7 @@ function createAdmission({ env, config, now = () => Date.now(), random = Math.ra
     const a = settings();
     noteEnabled(a.enabled);
     refill(t);
-    lapseIfDue(tk, t);
+    if (lapseIfDue(tk, t) && tk.redeemed) return { result: 'error', code: 'QUEUE_TICKET_INVALID' };
     if (!tk.grant && !a.enabled) grant(tk, t);
     touch(tk, t);
     if (tk.grant) return { result: 'ok', data: { grant: tk.grant } };
