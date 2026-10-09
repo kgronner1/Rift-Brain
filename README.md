@@ -345,6 +345,20 @@ bash ops/drills/test/drills_local.sh                                            
 bash ops/drills/test/drill5_local.sh                                                  5 against a local brain (Docker)
 ```
 
+**Capacity (RJ 484)** is not a release drill but lives beside them: `ops/drills/measure_capacity.sh` measures the box's
+memory, CPU and CPU credits idle and with 1, 2 and 3 bots' matches at once (dev's server, `--open_mode --bots=3`), and the
+brains' own figures. PLAN (the default) only reads; `--run` uploads `ops/drills/capacity_agent.sh`, which runs detached on
+the box, samples `/proc` every 5 s and stops every server it started on any exit; it never runs more than 3 matches, uses
+only ports 8100-8104, and kills everything if MemAvailable drops under 150 MB. `capacity_report.py` turns the samples and
+CloudWatch's `CPUCreditBalance` into the tables for Wobble Planet's `docs/backend-ops.md`, "Capacity".
+
+```
+bash ops/drills/measure_capacity.sh                          PLAN: read-only; what --run would do
+bash ops/drills/measure_capacity.sh --run --session 45       stages (~14 min), then 45 min of 2 matches back to back
+bash ops/drills/measure_capacity.sh --report <run dir>       re-render, CloudWatch fetched again (it lags ~10 min)
+bash ops/drills/test/measure_capacity_local.sh <server.x86_64>   against a stand-in box (Docker amazonlinux:2023)
+```
+
 **Drill 5 (RJ 471, spec M9)** runs Wobble Planet's swarm (`--net_swarm=N`: N real HTTP clients in one headless Godot,
 from the checkout beside this one) against dev. `ops/drills/swarm_accounts.sql` makes its accounts, `swarm0001` ..
 `swarm1000` with the dev password, and refuses any database whose name does not end in `_dev` (load it with
