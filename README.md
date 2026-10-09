@@ -298,7 +298,7 @@ worth protecting. `infra/test/provision_db.sh` tests the script in Docker, the r
 ## Release drills (RJ 470, spec M8)
 
 Every alpha release runs the drill checklist against dev first: Wobble Planet's `docs/release-drills.md` holds the
-table, the exact commands, what to watch on the phone, and the dated results. Drills 1, 2 and 7 are scripts here, each
+table, the exact commands, what to watch on the phone, and the dated results. Drills 1, 2, 5 and 7 are scripts here, each
 PLAN (read-only probes, nothing published, no sign-in) by default and `--run` to do it, each printing
 `DRILL<n> PASS` / `DRILL<n> FAIL` lines and a `DRILL<n> RESULT:`:
 
@@ -306,8 +306,19 @@ PLAN (read-only probes, nothing published, no sign-in) by default and `--run` to
 bash ops/drills/drill1_version_floor.sh --build <N> --user user<id> --run [--pause]   floors above the build, then put back
 bash ops/drills/drill2_server_behind.sh --user user<id> --run                         a newer wire: SERVER_BEHIND
 bash ops/drills/drill7_env_isolation.sh --user user<id> --run                         dev's token and credential at alpha
-bash ops/drills/test/drills_local.sh                                                  all three against local brains (Docker)
+bash ops/drills/drill5_stampede.sh --run                                              500 clients; brain-dev stopped 30 s
+bash ops/drills/test/drills_local.sh                                                  1, 2 and 7 against local brains (Docker)
+bash ops/drills/test/drill5_local.sh                                                  5 against a local brain (Docker)
 ```
+
+**Drill 5 (RJ 471, spec M9)** runs Wobble Planet's swarm (`--net_swarm=N`: N real HTTP clients in one headless Godot,
+from the checkout beside this one) against dev. `ops/drills/swarm_accounts.sql` makes its accounts, `swarm0001` ..
+`swarm1000` with the dev password, and refuses any database whose name does not end in `_dev` (load it with
+`sudo mysql rift_brain_dev` on the box). `drill5_stampede.sh --run` raises dev's `server.rate_limits.login_per_min_ip`
+for the drill, runs the swarm, stops and starts `rift-brain-dev` over SSH, reports, and puts the limit back, with an EXIT
+trap that starts the brain and republishes on any failure. `ops/drills/swarm_report.py <requests.csv>...` turns the
+swarm's request log into a 1 s histogram and the verdict: no 1 s reconnect bucket above 2x the mean of the first full
+steady window. `drill5_local.sh` runs it all against a local dev brain, the outage included.
 
 Drill 1 republishes the dev document it started from on any exit (an EXIT trap), unless someone else published dev
 meanwhile. A drill that signs in keeps the one credential it was issued in `~/.config/rift-jumpers/` and restores from
