@@ -1,7 +1,7 @@
 'use strict';
 // Small helpers the /v1 routes share.
 
-const { fail } = require('../../contract/envelope');
+const { fail, sendQueued } = require('../../contract/envelope');
 
 // Express 4 does not catch a rejected promise: every async handler goes through this.
 function route(fn) {
@@ -37,4 +37,16 @@ function asValidation(error) {
   fail('VALIDATION', { message: error.message });
 }
 
-module.exports = { route, isObject, body, parseUserId, requireUserId, asValidation };
+// The admission gate (M6) in front of a sign-in. Returns true when the request may go ahead; otherwise it has
+// answered `queued`, or raised QUEUE_TICKET_INVALID for a grant that is not this install's.
+function admitted(admission, req, res, { grant, refresh = false }) {
+  const r = admission.gate({ grant, install: req.rjClient.install, refresh });
+  if (r.result === 'admitted') return true;
+  if (r.result === 'queued') {
+    sendQueued(res, r.queued);
+    return false;
+  }
+  return fail(r.code, r.message ? { message: r.message } : {});
+}
+
+module.exports = { admitted, route, isObject, body, parseUserId, requireUserId, asValidation };

@@ -1,18 +1,18 @@
 'use strict';
-// POST /v1/accounts (spec 4.10): {username, email, password}, optional `grant` (M6). Today's rules, as VALIDATION.
+// POST /v1/accounts (spec 4.10): {username, email, password}, optional `grant` (M6: admission may answer `queued` first). Today's rules, as VALIDATION.
 // ok: as /v1/session, plus the credential.
 
 const { fail, sendOk } = require('../../contract/envelope');
 const { signSession, nowSecFrom } = require('../../auth/tokens');
 const { createAccount } = require('../../storage/users');
-const { route, body } = require('./util');
+const { route, body, admitted } = require('./util');
 
 // The messages checkNewUser() throws for bad input; anything else is a fault (INTERNAL).
 const RULE_MESSAGE_RE = /^(Missing required field|Username is not allowed|This username|Invalid email format|This email is already registered)/;
 const FIELD_MAX = { username: 64, email: 255, password: 1024 };
 
 function registerAccountRoutes(router, deps) {
-  const { env, config, limiter, now, rateLimited } = deps;
+  const { env, config, limiter, now, rateLimited, admission } = deps;
 
   router.post('/accounts', route(async (req, res) => {
     const b = body(req);
@@ -24,6 +24,7 @@ function registerAccountRoutes(router, deps) {
     for (const [k, max] of Object.entries(FIELD_MAX)) {
       if (typeof b[k] === 'string' && b[k].length > max) fail('VALIDATION', { message: `That ${k} is too long.` });
     }
+    if (!admitted(admission, req, res, { grant: b.grant })) return;
 
     let account;
     try {
