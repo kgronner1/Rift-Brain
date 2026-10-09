@@ -15,7 +15,7 @@
   "tunables": {
     "http_timeout_ms": 5000,
     "config_fetch_timeout_ms": 3000,
-    "backoff": { "base_ms": 1000, "cap_ms": 60000 },
+    "backoff": { "base_ms": 4000, "cap_ms": 60000 },
     "session_restore_max_attempts": 6,
     "queue_poll_default_ms": 5000,
     "join_connect_timeout_ms": 3000,
