@@ -20,7 +20,8 @@ ops/config/validate.mjs     checks a document: types, clamps, env (src/config/re
 ops/config/publish.sh       validate, client parser, lock guard, serial, upload, invalidate, fetch back
 ops/config/rollback.sh      republish an earlier S3 version under a new serial
 ops/drills/                 release drills 1, 2, 5 and 7 (plan by default), the swarm's accounts and report (RJ 471);
-                            ops/drills/test/drills_local.sh and drill5_local.sh run them locally
+                            ops/drills/test/drills_local.sh and drill5_local.sh run them locally; measure_capacity.sh, the
+                            box's capacity per match (RJ 484), with capacity_agent.sh and capacity_report.py
 ```
 
 Machine-specific values live in `~/.config/rift-jumpers/deploy.env`, never in git (the repository is public):
