@@ -6,7 +6,10 @@
 #
 #   (no --apply)   PLAN: read-only. Checks the box and prints what --apply would do. Changes nothing.
 #   --apply        do it
-#   --recopy-db    dev only: drop rift_brain_dev and copy rift_brain again (dev's data is a disposable copy)
+#   --recopy-db    dev only: drop rift_brain_dev and copy rift_brain again (dev's data is a disposable copy). A fresh
+#                  copy holds real player data again: scrub it (ops/db/scrub_snapshot.sh dev rift_brain_dev --apply)
+#
+# Both modes first check the box (preflight), and warn when under 250 MB of memory is available (RJ_MIN_AVAILABLE_MB).
 #
 # What --apply does, for <env>:
 #   1. Caddy (pinned release binary, checksum-verified) + its systemd unit; /etc/caddy/sites/<env>.caddy proxies
@@ -46,7 +49,7 @@ REF=""
 APPLY=0
 RECOPY=0
 # Steps a test can switch off (infra/test/provision_db.sh runs the database step alone).
-STEPS="${RJ_PROVISION_STEPS:-preflight caddy layout brain dotenv database pm2 verify}"
+STEPS="${RJ_PROVISION_STEPS:-preflight memory caddy layout brain dotenv database pm2 verify}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -116,7 +119,7 @@ step_preflight() {
   say "MariaDB $(admin_sql 'SELECT VERSION()')"
   [ "$(admin_sql "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='$LEGACY_DB'")" = 1 ] \
     || [ "$DB_INIT" = fresh ] || die "the legacy database $LEGACY_DB is not here, so there is nothing to copy"
-  say "memory: $(free -m | awk '/^Mem:/{print $2" MB total, "$7" MB available"}'); disk: $(df -h / | awk 'NR==2{print $4" free on /"}')"
+  say "disk: $(df -h / | awk 'NR==2{print $4" free on /"}')"
   # Anything already on the ports this environment needs, that is not ours.
   local busy
   for p in 80 443 "$PUBLIC_PORT" "$INTERNAL_PORT"; do
@@ -136,6 +139,33 @@ step_preflight() {
   fi
   systemctl is-enabled --quiet "pm2-$BOX_USER" 2>/dev/null \
     || say "WARNING: pm2-$BOX_USER is not an enabled service, so pm2 save does not survive a reboot (pm2 startup)"
+  # The game ports, UDP: anything on them while this environment's brain is not running is something else's.
+  local lo="${GAME_PORTS%-*}" hi="${GAME_PORTS#*-}" held
+  held="$(sudo ss -lunH 2>/dev/null | awk -v lo="$lo" -v hi="$hi" '{n=split($4,a,":"); p=a[n]+0; if (p>=lo && p<=hi) print p}' | sort -nu | tr '\n' ' ' || true)"
+  if [ -n "$held" ] && ! pm2 jlist 2>/dev/null | grep -q "\"name\":\"$APP\""; then
+    say "WARNING: UDP ${held}(in $GAME_PORTS) already in use and $APP is not running; its lobbies cannot bind them"
+  fi
+}
+
+# --- 0b. memory --------------------------------------------------------------------------------------------------
+# The box is small (949 MB on a t2.micro; spec 5). A warning, never a refusal: a tight box still works, but --apply's
+# npm ci and a new brain beside the others can push it into the OOM killer. RJ_MEM_AVAILABLE_MB stands in for free(1)
+# in infra/test/provision_db.sh.
+MIN_AVAILABLE_MB="${RJ_MIN_AVAILABLE_MB:-250}"
+step_memory() {
+  local avail total swap
+  if [ -n "${RJ_MEM_AVAILABLE_MB:-}" ]; then
+    avail="$RJ_MEM_AVAILABLE_MB"; total="?"; swap="?"
+  else
+    avail="$(free -m | awk '/^Mem:/{print $7}')"
+    total="$(free -m | awk '/^Mem:/{print $2}')"
+    swap="$(free -m | awk '/^Swap:/{print $4" of "$2}')"
+  fi
+  say "memory: $total MB total, $avail MB available; swap free: $swap MB"
+  [[ "$avail" =~ ^[0-9]+$ ]] || { say "WARNING: could not read the available memory"; return 0; }
+  if [ "$avail" -lt "$MIN_AVAILABLE_MB" ]; then
+    say "WARNING: only $avail MB of memory available (under $MIN_AVAILABLE_MB MB). $APP needs ~70-100 MB, npm ci more, and each game server more again: stop something, add swap, or resize to a t3.small (spec 5) first"
+  fi
 }
 
 # --- 1. Caddy ----------------------------------------------------------------------------------------------------
@@ -409,6 +439,7 @@ step_database() {
   fi
   (cd "$BRAIN_DIR" && node src/migrate.js)
   [ "$copied" = 0 ] || say "the copy is baselined and migrated"
+  [ "$copied" = 0 ] || say "WARNING: $DB_NAME now holds real player data; scrub it before anyone else uses dev (README.md, \"Player data outside production\")"
 }
 
 # --- 5. pm2 ------------------------------------------------------------------------------------------------------
@@ -524,7 +555,7 @@ step_verify() {
   else say "WARNING: https://$API_HOST/ does not answer yet. DNS (rj-box) must point here and TCP 80/443 be open; see journalctl -u caddy"; fi
 }
 
-for s in preflight caddy layout brain dotenv database pm2 verify; do
+for s in preflight memory caddy layout brain dotenv database pm2 verify; do
   step_on "$s" || continue
   "step_$s"
 done

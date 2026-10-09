@@ -64,6 +64,7 @@ fixtures/               join_token_v1.txt and its builder: the client's cross-la
 test/                   npm test (node --test); pure tests need no database
 config/                 the remote config documents, one per environment (RJ 463)
 ops/config/             validate.mjs, publish.sh, rollback.sh (RJ 463)
+ops/db/scrub_snapshot.sh  scrubs a copy of player data (RJ 469): "Player data outside production"
 infra/                  CloudFormation, the box's provisioning, and their tests (RJ 463): infra/README.md
 ```
 
@@ -268,3 +269,26 @@ restart.
 **Tests.** `test/admission.test.js` (the queue itself over an injected clock; no fetch, so it also runs on Node 16),
 `test/admission_http.test.js` (the routes, no database) and `test/admission.db.test.js` (a grant redeemed for a
 session, against a database built from `migrations/`, with `RJ_TEST_DB`).
+
+## Player data outside production (RJ 469, spec M7)
+
+**The rule.** Real player data lives only in production's database (today the legacy `rift_brain`; after cutover
+`rift_brain_alpha`). Any copy of it anywhere else -- `rift_brain_dev`, a laptop, a test fixture -- is scrubbed
+before anyone uses it, with `ops/db/scrub_snapshot.sh`. Alpha and production are never scrubbed in place:
+the script refuses any target whose name contains `alpha` or `prod`, and `rift_brain` itself.
+
+```
+bash ops/db/scrub_snapshot.sh dev rift_brain_dev                  # PLAN: read-only, says what it would change
+bash ops/db/scrub_snapshot.sh dev rift_brain_dev --apply          # scrub dev in place
+bash ops/db/scrub_snapshot.sh legacy rj_snapshot_x --apply        # copy rift_brain into a new database, then scrub it
+... --box                                                         # from the Mac: the same, run on the box over SSH
+```
+
+A scrub, in one transaction: `users.email = user<id>@example.invalid`, `users.username = user<id>`, every
+`users.password` the one fixed bcrypt hash of `riftjumpers-dev` (printed at the end; every account then signs in
+with it, by either name), `users.access_token` cleared where it still exists, and every `user_credentials` row
+deleted. No other table holds personal data. It is safe to re-run, and a scrubbed database scrubs to itself.
+
+A fresh copy into dev (`provision_box.sh --env dev --recopy-db`) brings real data back: scrub straight after it.
+The scrubbed password is public on purpose (this repository is public), so a scrubbed database holds no account
+worth protecting. `infra/test/provision_db.sh` tests the script in Docker, the refusals included.
