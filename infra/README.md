@@ -307,10 +307,10 @@ docs/backend-ops.md, "The floor policy").
 
 ## The box's address
 
-The box's public IP (54.193.62.212 on 2026-10-07) is **not** an Elastic IP: a stop/start changes it. Today's
-builds hardcode it, and associating an Elastic IP would also change it, so M1 leaves it alone. The A records take
-the IP as a parameter: after any change, re-run `bash infra/deploy_stacks.sh --apply --box-only` (TTL 300).
-An Elastic IP belongs at cutover (M7), when no build hardcodes the IP any more: "The cutover, in order", step 4g.
+The box has an Elastic IP since 2026-10-11: `54.176.158.209` (`eipalloc-0e6cf817267fe5e0c`), attached in the console,
+then `bash infra/deploy_stacks.sh --apply --box-only` moved the A records. It survives a stop/start, so a resize needs
+no DNS change. The previous address (54.193.62.212) is released, so builds from before the batch, which hardcoded
+it, no longer reach the box. The cutover's step 4g ("The cutover, in order") is therefore already done.
 
 ## Remote config
 
