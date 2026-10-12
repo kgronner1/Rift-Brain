@@ -177,8 +177,11 @@ function maintainLogs(logDir, { maxBytes = LOG_MAX_BYTES, maxFiles = LOG_MAX_FIL
   return out;
 }
 
+// How long a stopped game server has to exit on SIGTERM before it gets SIGKILL.
+const KILL_GRACE_MS = 5000;
+
 // The real box. serversDir and brainUrl scope which processes are ours: nothing else is ever signalled.
-function createHost({ serversDir, brainUrl = null, logDir = null, logLimits = {} }) {
+function createHost({ serversDir, brainUrl = null, logDir = null, logLimits = {}, killGraceMs = KILL_GRACE_MS }) {
   if (logDir) {
     try {
       fs.mkdirSync(logDir, { recursive: true, mode: 0o750 });
@@ -203,10 +206,25 @@ function createHost({ serversDir, brainUrl = null, logDir = null, logLimits = {}
       return ownServers(await listProcesses(), serversDir, brainUrl);
     },
     // Stops lobby <lobbyId>'s process, found by its command line under serversDir, never by a pid alone: a stale or
-    // wrong pid (an adopted lobby's heartbeat names its own) can never stop anything else.
+    // wrong pid (an adopted lobby's heartbeat names its own) can never stop anything else. It works the same whether
+    // or not this brain is the process's parent (an adopted lobby's is not). A process still there killGraceMs later,
+    // with the same pid and lobby id, gets SIGKILL. Resolves how many processes were signalled.
     async stop(lobbyId) {
       const mine = (await this.ownServers()).filter((s) => s.lobbyId === lobbyId);
       for (const s of mine) signal(s.pid);
+      if (mine.length && killGraceMs > 0) {
+        const pids = new Set(mine.map((s) => s.pid));
+        const timer = setTimeout(() => {
+          this.ownServers().then((now) => {
+            for (const s of now) {
+              if (s.lobbyId !== lobbyId || !pids.has(s.pid)) continue;
+              log.warn(`[host] lobby ${lobbyId} (pid ${s.pid}) outlived SIGTERM by ${killGraceMs} ms; SIGKILL`);
+              signal(s.pid, 'SIGKILL');
+            }
+          }).catch((e) => log.error(`[host] checking lobby ${lobbyId} after SIGTERM: ${e.message}`));
+        }, killGraceMs);
+        timer.unref();
+      }
       return mine.length;
     },
   };
@@ -214,5 +232,5 @@ function createHost({ serversDir, brainUrl = null, logDir = null, logLimits = {}
 
 module.exports = {
   createHost, udpPortFree, childEnv, serverArgs, startServer, listProcesses, ownServers, noCoreCommand, maintainLogs,
-  PASSED_ENV, LOG_MAX_BYTES, LOG_MAX_FILES, LOG_MAX_AGE_MS,
+  PASSED_ENV, LOG_MAX_BYTES, LOG_MAX_FILES, LOG_MAX_AGE_MS, KILL_GRACE_MS,
 };
