@@ -14,7 +14,7 @@ matchmaking, the admission queue, and the internal API that game servers report 
 - **`README.md`** covers the layout, migrations, API v1, matchmaking, the admission queue, the player-data rule and
   the drills.
 - **`infra/README.md`** covers the box, provisioning, AWS stacks, the cutover, and every undo.
-- **The contract** is spec section 4, in `~/.claude/projects/-Users-alex-Documents-GitHub-Wobble-Planet/spec-alpha-readiness-2026-10-02.md`.
+- **The contract** is spec section 4, in Wobble Planet's `specs/alpha-readiness-2026-10-02.md`.
   - It is **additive only**: never rename, retype or remove a field, code or route.
   - Changing it needs both Alex and Kyler.
   - The client must agree with it: `src/contract/codes.js` matches Wobble Planet's `Scripts/Net/HandshakeCodes.gd`, and
