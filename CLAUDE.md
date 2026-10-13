@@ -35,6 +35,31 @@ matchmaking, the admission queue, and the internal API that game servers report 
   `ops/config/` publishes them. `ops/drills/` holds the release drills, the swarm and capacity. `ops/db/` holds the
   dev scrub. `infra/` holds CloudFormation, provisioning and Caddy.
 
+## What this repo shares with Wobble Planet
+
+Changing any of these here breaks the client or the game server unless Wobble Planet changes with it:
+
+- **Remote config schema.** `src/config/remoteSchema.js` and Wobble Planet's `Scripts/Net/RemoteConfigSchema.gd` must
+  agree field for field. `publish.sh` runs both validators, the second through `Tools/harness/check_remote_config.gd`.
+- **Error codes and tokens.** `src/contract/codes.js` must match `Scripts/Net/HandshakeCodes.gd`, and the token
+  encoding must match `Scripts/Net/NetTokens.gd`. Both repos check `fixtures/join_token_v1.txt`; Wobble Planet keeps a
+  copy in `Tools/harness/fixtures/`.
+- **Spawning servers and the internal API.** This covers the argv and environment a game server is spawned with, the
+  `/internal/v1` replies, and a heartbeat after `LOBBY_NOT_FOUND`. They must match `Scripts/Net/BrainClient.gd`;
+  Wobble Planet's `docs/backend-realtime.md` documents them.
+- **Server manifest.** `src/match/manifest.js` reads what Wobble Planet's `deploy_server.sh` writes, through
+  `Tools/server/server_manifest.py`.
+- **Wire protocol.** Wobble Planet owns it (`Scripts/Net/WireProtocol.gd`, bumped by its smoke test); the brain only
+  routes on `(wire, fp)`.
+
+Some scripts here run Wobble Planet's harness: `publish.sh`'s client check, `stack_loop.sh` and the drills.
+- They need Godot 4.6 at `/Applications/Godot.app` and the Wobble Planet project imported.
+- Wobble Planet's `Tools/harness/_common.sh` is written for `set -uo pipefail`. When you source it from a `set -e`
+  script, do it in a subshell with `set +e`, and never source it in zsh.
+
+Wobble Planet's own `CLAUDE.md` is at its size cap, which its docs test enforces. Documentation for a change there
+goes into the topic doc it belongs to, not that file.
+
 ## Verify before handing back
 
 - **Tests:** `npm test`. The database tests run only when `RJ_TEST_DB` is set. Use a throwaway Docker
