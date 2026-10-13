@@ -2,7 +2,7 @@
 
 Everything outside the brain's code: the AWS edge for `config.riftjumpers.space`, the box's security group and
 DNS records, the box's provisioning, and the remote config documents. The spec is
-`spec-alpha-readiness-2026-10-02.md` (Alex's `~/.claude/projects/...`), sections 4.5, 5 and M1.
+Wobble Planet's `specs/alpha-readiness-2026-10-02.md`, sections 4.5, 5 and M1.
 
 ```
 infra/stacks.env            fixed, public settings (domain, stack names, regions, AWS profile "rj")
