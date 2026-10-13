@@ -223,7 +223,7 @@ function createMatchRegistry({
       if (lobbies.get(lobby.id) !== lobby) return;
       const how = sig ? `killed by ${sig}` : `exited with status ${code}`;
       if (!lobby.heartbeated) recordEarlyDeath(lobby, how);
-      await endLobby(lobby, `its server ${how}`);
+      await endLobby(lobby, `its server ${how}`, true);
     });
   }
 
@@ -254,7 +254,8 @@ function createMatchRegistry({
     return lobby;
   }
 
-  async function endLobby(lobby, why) {
+  // serverGone: the lobby ends because its server exited or went silent, so finding no process to stop is expected.
+  async function endLobby(lobby, why, serverGone = false) {
     if (!lobbies.has(lobby.id)) return;
     lobbies.delete(lobby.id);
     logger.info(`[match] lobby ${lobby.id} ended (${why}); UDP ${lobby.port} free`);
@@ -267,7 +268,9 @@ function createMatchRegistry({
       }
     }
     try {
-      await host.stop(lobby.id);
+      const n = await host.stop(lobby.id);
+      if (n) logger.info(`[match] lobby ${lobby.id}: SIGTERM to its server`);
+      else if (!serverGone) logger.warn(`[match] lobby ${lobby.id}: no server process found to stop`);
     } catch (e) {
       logger.error(`[match] stopping lobby ${lobby.id}: ${e.message}`);
     }
@@ -690,7 +693,7 @@ function createMatchRegistry({
       if (t - lobby.lastHeartbeat > HEARTBEAT_TIMEOUT_MS) {
         // A server that hangs (or dies unseen, after a brain restart) before its first heartbeat is an early death too.
         if (!lobby.heartbeated && !lobby.adopted) recordEarlyDeath(lobby, 'no heartbeat within 45 s of its spawn');
-        await endLobby(lobby, 'no heartbeat for 45 s');
+        await endLobby(lobby, 'no heartbeat for 45 s', true);
         continue;
       }
       for (const [seat, s] of lobby.seats) {

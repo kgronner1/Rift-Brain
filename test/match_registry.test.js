@@ -321,3 +321,37 @@ test('a binary that will not start answers INTERNAL instead of retrying every se
   assert.equal(reg.lobbies.size, 0, 'the port is not held by a lobby that never started');
   assert.match(logger.lines.join('\n'), /could not start .*spawn ENOENT/);
 });
+
+test('RJ 482: a lobby ended while its server should be running logs the stop, and warns when no process is found', async () => {
+  const { reg, host, advance, logger } = makeRegistry();
+  const pid = 4242;
+  const hb = (port, state = 'PREGAME') => ({ port, wire: 17, fp: FP_A, state, players: [], bots: 0, private_code: '', pid });
+  // Adopted, then empty and heartbeating until the 120 s rule ends it.
+  async function adoptAndEmpty(id, port) {
+    assert.equal((await reg.heartbeat(id, hb(port))).result, 'ok');
+    await reg.sweep();
+    for (let waited = 0; reg.lobbies.has(id) && waited <= EMPTY_LOBBY_MS; waited += 20000) {
+      advance(20000);
+      await reg.heartbeat(id, hb(port));
+      await reg.sweep();
+    }
+    assert.equal(reg.lobbies.has(id), false);
+  }
+  host.running.set('adopted0000482c', pid);
+  await adoptAndEmpty('adopted0000482c', 8100);
+  assert.ok(host.stopped.includes('adopted0000482c'));
+  assert.ok(logger.lines.some((l) => l.includes('lobby adopted0000482c: SIGTERM to its server')), logger.lines.join('\n'));
+
+  // The same end with nothing to stop is a warning: the server it should have stopped was not found.
+  host.stop = async (id) => { host.stopped.push(id); return 0; };
+  await adoptAndEmpty('adopted0000482d', 8101);
+  assert.ok(logger.lines.some((l) => l.includes('lobby adopted0000482d: no server process found to stop')), logger.lines.join('\n'));
+
+  // A lobby whose server went silent ends without that warning: finding nothing is expected there.
+  const before = logger.lines.length;
+  assert.equal((await reg.heartbeat('adopted0000482e', hb(8102, 'INGAME'))).result, 'ok');
+  advance(HEARTBEAT_TIMEOUT_MS + 1000);
+  await reg.sweep();
+  assert.equal(reg.lobbies.has('adopted0000482e'), false);
+  assert.ok(!logger.lines.slice(before).some((l) => l.includes('no server process found')), logger.lines.join('\n'));
+});

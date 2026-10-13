@@ -212,6 +212,12 @@ else of the brain's environment but `PATH HOME USER LANG LC_ALL TMPDIR`. Its sta
 bots < 4. A join token's seat is reserved for 60 s; `player-joined` seats it, `player-left` frees it. A lobby with no
 heartbeat for 45 s is stopped; an empty one ends after `POSTGAME`, or after 120 s empty in `PREGAME` or `INGAME`. A
 lobby whose server process exits ends at once (the brain hears it while it is the process's parent).
+When a lobby ends, its server is found by its command line (never by a pid alone) and sent SIGTERM, whether or not
+this brain is its parent (an adopted lobby's is not), and logged as `[match] lobby <id>: SIGTERM to its server`; one
+still there 5 s later gets SIGKILL (`[host] ... outlived SIGTERM`). A lobby the brain ends while its server should be
+running, with no process found, logs `no server process found to stop` (RJ 482). To check the box for servers, anchor
+the pattern, `pgrep -af '^/opt/rj/<env>/servers/'`: unanchored, `ssh <host> "pgrep -f <pattern> ..."` also matches the
+remote shell running it, whose own command line holds the pattern.
 
 **A crashing server** (2026-10-09: wire 2 SIGSEGV'd at boot before printing a line, and the brain respawned it every
 45 s, each crash dumping a ~21 MB core on the shared box) is held three ways:

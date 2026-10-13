@@ -139,8 +139,11 @@ step_preflight() {
   fi
   admin_sql 'SELECT 1' >/dev/null 2>&1 || die "cannot reach MariaDB as admin with: ${MYSQL_ADMIN[*]} (set RJ_MYSQL_ADMIN)"
   say "MariaDB $(admin_sql 'SELECT VERSION()')"
+  # Since the cutover (2026-10-11) the legacy database is gone; a dev database that already has its tables needs no copy.
   [ "$(admin_sql "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='$LEGACY_DB'")" = 1 ] \
-    || [ "$DB_INIT" = fresh ] || die "the legacy database $LEGACY_DB is not here, so there is nothing to copy"
+    || [ "$DB_INIT" = fresh ] \
+    || { [ "$RECOPY" = 0 ] && [ "$(table_count "$DB_NAME")" -gt 0 ]; } \
+    || die "the legacy database $LEGACY_DB is not here, so there is nothing to copy"
   say "disk: $(df -h / | awk 'NR==2{print $4" free on /"}')"
   # Anything already on the ports this environment needs, that is not ours.
   local busy
