@@ -167,7 +167,8 @@ function cell_(header, v) {
 function text_(v) {
   var s = typeof v === 'string' ? v : (typeof v === 'object' ? JSON.stringify(v) : String(v));
   if (s.length > CELL_MAX) s = s.slice(0, CELL_MAX);
-  return s === '' ? '' : "'" + s;
+  // A cell formatted '@' shows a leading apostrophe literally, so it is added only where a formula could start.
+  return /^[=+\-@]/.test(s) ? "'" + s : s;
 }
 
 // --- the tab --------------------------------------------------------------------------------------------------------

