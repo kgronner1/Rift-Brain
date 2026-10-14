@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RjAlertTopics",
+      "Effect": "Allow",
+      "Action": "sns:*",
+      "Resource": ["arn:aws:sns:us-west-1:*:rj-alerts*", "arn:aws:sns:us-east-1:*:rj-alerts*"]
+    },
+    {
+      "Sid": "RjAlarms",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:SetAlarmState",
+        "cloudwatch:EnableAlarmActions",
+        "cloudwatch:DisableAlarmActions",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource"
+      ],
+      "Resource": ["arn:aws:cloudwatch:us-west-1:*:alarm:rj-*", "arn:aws:cloudwatch:us-east-1:*:alarm:rj-*"]
+    }
+  ]
+}

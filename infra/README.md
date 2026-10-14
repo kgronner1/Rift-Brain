@@ -143,25 +143,9 @@ provisioning installs it. `journalctl -u rj-metrics` shows each run; `sudo syste
 `infra/test/report_metrics.sh` tests it, its units and the provision step in Docker.
 
 **Its credentials** are the instance profile `rj-box-metrics`, made by hand in the console (`rj-deploy` holds no IAM
-rights, deliberately): a role trusted by EC2 with one inline policy,
-```json
-{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "cloudwatch:PutMetricData", "Resource": "*",
-  "Condition": {"StringEquals": {"cloudwatch:namespace": "RiftJumpers/Box"}}}]}
-```
-attached to the box with EC2 -> the instance -> Actions -> Security -> Modify IAM role.
-
-**The deployer** needs, beside its managed policies (`CloudWatchReadOnlyAccess` cannot make an alarm), an inline
-policy `rj-alerts` on `rj-deploy`:
-```json
-{"Version": "2012-10-17", "Statement": [
-  {"Sid": "RjAlertTopics", "Effect": "Allow", "Action": "sns:*",
-   "Resource": ["arn:aws:sns:us-west-1:<account>:rj-alerts*", "arn:aws:sns:us-east-1:<account>:rj-alerts*"]},
-  {"Sid": "RjAlarms", "Effect": "Allow",
-   "Action": ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:SetAlarmState",
-              "cloudwatch:EnableAlarmActions", "cloudwatch:DisableAlarmActions",
-              "cloudwatch:TagResource", "cloudwatch:UntagResource"],
-   "Resource": ["arn:aws:cloudwatch:us-west-1:<account>:alarm:rj-*", "arn:aws:cloudwatch:us-east-1:<account>:alarm:rj-*"]}]}
-```
+rights, deliberately): a role trusted by EC2 whose one inline policy is `infra/iam/rj-box-metrics.json`, attached to
+the box with EC2 -> the instance -> Actions -> Security -> Modify IAM role. The deployer needs the inline policy
+`infra/iam/rj-alerts.json` to make the topics and alarms (infra/iam/README.md).
 
 | # | Command | Changes | Undo |
 |---|---|---|---|
