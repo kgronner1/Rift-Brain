@@ -17,6 +17,9 @@
 #   RJ_SSH_CIDRS     space-separated, 1 to 3 CIDRs allowed to SSH (required for rj-box). Kept out of git: the
 #                    repository is public. 0.0.0.0/0 is accepted, with a warning.
 #   RJ_INSTANCE_ID   optional; otherwise the instance is found by its public IP.
+#   RJ_ALERT_EMAIL   where the load alarms email (RJ 487); both stacks take it. Kept out of git like the CIDRs, and
+#                    required by --changeset and --apply. Each stack's topic sends one confirmation email when the
+#                    subscription is first made: click Confirm subscription, or nothing is delivered.
 #
 # Undo (spec 7a): see infra/README.md, "Undo".
 set -euo pipefail
@@ -127,10 +130,16 @@ if [ "$DO_BOX" = 1 ]; then
   done
 fi
 
-EDGE_PARAMS=("DomainName=$RJ_DOMAIN" "HostedZoneId=$HOSTED_ZONE_ID")
-BOX_PARAMS=("DomainName=$RJ_DOMAIN" "HostedZoneId=$HOSTED_ZONE_ID")
+ALERT_EMAIL="${RJ_ALERT_EMAIL:-}"
+if ! [[ "$ALERT_EMAIL" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then
+  [ "$MODE" = plan ] || die "set RJ_ALERT_EMAIL in $DEPLOY_ENV: the address the load alarms email (RJ 487)"
+  say "WARNING: no RJ_ALERT_EMAIL in $DEPLOY_ENV; --changeset and --apply refuse to run without it"
+  ALERT_EMAIL="(unset)"
+fi
+EDGE_PARAMS=("DomainName=$RJ_DOMAIN" "HostedZoneId=$HOSTED_ZONE_ID" "AlertEmail=$ALERT_EMAIL")
+BOX_PARAMS=("DomainName=$RJ_DOMAIN" "HostedZoneId=$HOSTED_ZONE_ID" "AlertEmail=$ALERT_EMAIL")
 if [ "$DO_BOX" = 1 ]; then
-  BOX_PARAMS+=("VpcId=$VPC_ID" "BoxPublicIp=$BOX_IP" "SshCidr1=${SSH_CIDRS[0]}" "SshCidr2=${SSH_CIDRS[1]:-}" "SshCidr3=${SSH_CIDRS[2]:-}")
+  BOX_PARAMS+=("VpcId=$VPC_ID" "BoxPublicIp=$BOX_IP" "InstanceId=$INSTANCE_ID" "SshCidr1=${SSH_CIDRS[0]}" "SshCidr2=${SSH_CIDRS[1]:-}" "SshCidr3=${SSH_CIDRS[2]:-}")
 fi
 
 stack_status() {
@@ -153,7 +162,8 @@ deploy() {
   case "$MODE" in
     plan)
       say "PLAN: would deploy $stack from $(basename "$template") with:"
-      printf '         %s\n' "$@"
+      # The alert address stays off the screen (and out of any log pasted somewhere public).
+      printf '         %s\n' "$@" | sed 's/^\( *AlertEmail=\).*/\1(RJ_ALERT_EMAIL)/'
       ;;
     changeset)
       aws_rj cloudformation deploy --region "$region" --stack-name "$stack" --template-file "$template" \

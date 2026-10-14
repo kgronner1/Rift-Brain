@@ -3,7 +3,9 @@ Description: >-
   Rift Jumpers edge (RJ 463): config.<domain> -- a private, versioned S3 bucket behind CloudFront, with its
   DNS-validated certificate and alias records. Deploy in us-east-1 (CloudFront takes ACM certificates from there
   only). Takes the existing hosted zone; never creates one. Deleting the stack keeps the bucket (DeletionPolicy
-  Retain), so a delete-stack always completes; the published documents' sources are in git.
+  Retain), so a delete-stack always completes; the published documents' sources are in git. Since RJ 487 also the
+  Route 53 health check on api.<domain> (alpha) and its alarm, which must live here: Route 53's metrics exist only
+  in us-east-1. It emails through its own topic, rj-alerts-edge.
 
 Parameters:
   DomainName:
@@ -18,6 +20,11 @@ Parameters:
     Type: String
     Default: config
     AllowedPattern: '^[a-z0-9-]+$'
+  AlertEmail:
+    Type: String
+    NoEcho: true
+    AllowedPattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+    Description: Where the alarm emails (RJ_ALERT_EMAIL in deploy.env; kept out of git, the repository is public).
 
 Resources:
   Certificate:
@@ -177,6 +184,56 @@ Resources:
         HostedZoneId: Z2FDTNDATAQYW2
         EvaluateTargetHealth: false
 
+
+  # --- is alpha answering? (RJ 487) -------------------------------------------------------------------------------
+  # The brain's root answers 200 without the X-RJ-* headers; a health check cannot send headers, so never a /v1 route.
+  # With the brain down Caddy answers 503, which fails the check too.
+  AlphaApiHealthCheck:
+    Type: AWS::Route53::HealthCheck
+    Properties:
+      HealthCheckConfig:
+        Type: HTTPS
+        FullyQualifiedDomainName: !Sub 'api.${DomainName}'
+        Port: 443
+        ResourcePath: /
+        EnableSNI: true
+        RequestInterval: 30
+        FailureThreshold: 3
+      HealthCheckTags:
+        - Key: Name
+          Value: rj-alpha-api
+        - Key: project
+          Value: rift-jumpers
+
+  EdgeAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: rj-alerts-edge
+      DisplayName: RJ alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+      Tags:
+        - Key: project
+          Value: rift-jumpers
+
+  AlphaApiDownAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: rj-alpha-api-down
+      AlarmDescription: !Sub 'https://api.${DomainName}/ fails Route 53 health checks for 2 min.'
+      Namespace: AWS/Route53
+      MetricName: HealthCheckStatus
+      Dimensions: [{Name: HealthCheckId, Value: !Ref AlphaApiHealthCheck}]
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: missing
+      AlarmActions: [!Ref EdgeAlertTopic]
+      OKActions: [!Ref EdgeAlertTopic]
+
 Outputs:
   BucketName:
     Value: !Ref Bucket
@@ -188,3 +245,7 @@ Outputs:
     Value: !Ref Certificate
   ConfigBaseUrl:
     Value: !Sub 'https://${ConfigSubdomain}.${DomainName}/'
+  AlphaHealthCheckId:
+    Value: !Ref AlphaApiHealthCheck
+  EdgeAlertTopicArn:
+    Value: !Ref EdgeAlertTopic

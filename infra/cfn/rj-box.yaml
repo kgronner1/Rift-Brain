@@ -3,7 +3,9 @@ Description: >-
   Rift Jumpers box (RJ 463): the security group rj-public (HTTPS for Caddy, the alpha and dev game-server UDP
   ranges, SSH from listed CIDRs) and the api / api-dev / play A records. Deploy in the box's region (us-west-1).
   The instance and its old security group are not managed here: infra/deploy_stacks.sh attaches rj-public beside
-  the old group, which keeps TCP 3000 and UDP 8080-8085 open for today's builds until cutover.
+  the old group, which keeps TCP 3000 and UDP 8080-8085 open for today's builds until cutover. Since RJ 487 also the
+  load alarms: the SNS topic rj-alerts (email) and six CloudWatch alarms, on EC2's own metrics and on the box's
+  reporter (infra/box/report_metrics.sh, namespace RiftJumpers/Box).
 
 Parameters:
   DomainName:
@@ -39,6 +41,14 @@ Parameters:
     Default: 300
     MinValue: 60
     MaxValue: 86400
+  InstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: The box, whose EC2 metrics the alarms watch.
+  AlertEmail:
+    Type: String
+    NoEcho: true
+    AllowedPattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+    Description: Where the alarms email (RJ_ALERT_EMAIL in deploy.env; kept out of git, the repository is public).
 
 Conditions:
   HasSsh2: !Not [!Equals [!Ref SshCidr2, '']]
@@ -126,7 +136,123 @@ Resources:
       TTL: !Ref RecordTtl
       ResourceRecords: [!Ref BoxPublicIp]
 
+  # --- load alarms (RJ 487) --------------------------------------------------------------------------------------
+  # Each emails rj-alerts when it starts and again when it clears. Thresholds from the measured capacity (Wobble
+  # Planet docs/backend-ops.md, "Capacity"): ~529 MB available at idle, ~105 MB per match, 2 matches comfortable.
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: rj-alerts
+      DisplayName: RJ alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+      Tags:
+        - Key: project
+          Value: rift-jumpers
+
+  StatusCheckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: rj-box-status-check
+      AlarmDescription: The box or its host fails EC2's status checks.
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions: [{Name: InstanceId, Value: !Ref InstanceId}]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: missing
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  CpuHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: rj-box-cpu-high
+      AlarmDescription: Sustained CPU over 70% for 15 min (a match is ~4%).
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions: [{Name: InstanceId, Value: !Ref InstanceId}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: missing
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  CpuCreditsLowAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: rj-box-cpu-credits-low
+      AlarmDescription: CPU credits under 30 of 144; a t2 slows hard when they run out.
+      Namespace: AWS/EC2
+      MetricName: CPUCreditBalance
+      Dimensions: [{Name: InstanceId, Value: !Ref InstanceId}]
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 30
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: missing
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  MemoryLowAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: rj-box-memory-low
+      AlarmDescription: Under 200 MB of memory available for 10 min; room for about one more match.
+      Namespace: RiftJumpers/Box
+      MetricName: MemAvailableMB
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 200
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: missing
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  MatchesHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: rj-box-matches-high
+      AlarmDescription: More than 2 matches at once for 10 min, dev and alpha together; time to resize (RJ 474).
+      Namespace: RiftJumpers/Box
+      MetricName: ActiveMatches
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 2
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
+  ReporterSilentAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: rj-box-reporter-silent
+      AlarmDescription: No sample from rj-report-metrics for 15 min; the reporter or the box has stopped.
+      Namespace: RiftJumpers/Box
+      MetricName: MemAvailableMB
+      Statistic: SampleCount
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
 Outputs:
+  AlertTopicArn:
+    Value: !Ref AlertTopic
   SecurityGroupId:
     Value: !Ref PublicSecurityGroup
   BoxPublicIp:

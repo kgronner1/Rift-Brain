@@ -1,0 +1,19 @@
+# Installed by infra/box/provision.sh (RJ 487). Started by rj-metrics.timer; sends the box's memory and running
+# matches to CloudWatch (infra/box/report_metrics.sh). `journalctl -u rj-metrics` shows each run.
+[Unit]
+Description=Rift Jumpers: send the box's memory and matches to CloudWatch
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/rj-report-metrics
+TimeoutStartSec=60
+DynamicUser=yes
+RuntimeDirectory=rj-metrics
+Environment=HOME=/run/rj-metrics
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+Nice=10
