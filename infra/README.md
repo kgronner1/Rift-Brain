@@ -150,7 +150,7 @@ rights, deliberately): a role trusted by EC2 with one inline policy,
 ```
 attached to the box with EC2 -> the instance -> Actions -> Security -> Modify IAM role.
 
-**The deployer** needs, beside its managed policies (`CloudWatchReadOnlyAccess` cannot make an alarm), an inline
+**The deployer** needs, beside its managed policies (none of which can make an alarm or a topic), an inline
 policy `rj-alerts` on `rj-deploy`:
 ```json
 {"Version": "2012-10-17", "Statement": [
