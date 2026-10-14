@@ -76,3 +76,23 @@ test('the rate limiter\'s day window sits beside the minute window, in its own b
   t = DAY_MS;
   assert.equal(l.hit('day', 'ip', 2, DAY_MS).ok, true, 'a new day');
 });
+
+test('FEEDBACK_SHEET_URL and FEEDBACK_SHEET_SECRET: optional, both or neither; a bad pair warns and forwards nothing', () => {
+  const { loadEnv } = require('../src/config/env');
+  const base = { MYSQL_HOST: 'h', MYSQL_USER: 'u', MYSQL_PASSWORD: '', MYSQL_DATABASE: 'd' };
+  const at = (extra) => {
+    const e = loadEnv({ ...base, ...extra });
+    return [e.FEEDBACK_SHEET, [...e.FEEDBACK_SHEET_WARNINGS]];
+  };
+  const SECRET = 'AB'.repeat(32);
+  const URL = 'https://script.google.com/macros/s/x/exec';
+  assert.deepEqual(at({}), [null, []]);
+  assert.deepEqual(at({ FEEDBACK_SHEET_URL: ` ${URL} `, FEEDBACK_SHEET_SECRET: SECRET }), [{ url: URL, secret: SECRET }, []]);
+  assert.match(at({ FEEDBACK_SHEET_URL: URL })[1][0], /go together, and only the URL is set/);
+  assert.match(at({ FEEDBACK_SHEET_SECRET: SECRET })[1][0], /only the secret is set/);
+  assert.match(at({ FEEDBACK_SHEET_URL: 'http://x.io/exec', FEEDBACK_SHEET_SECRET: SECRET })[1][0], /must be https/);
+  assert.match(at({ FEEDBACK_SHEET_URL: 'nope', FEEDBACK_SHEET_SECRET: SECRET })[1][0], /is not a URL/);
+  const short = at({ FEEDBACK_SHEET_URL: URL, FEEDBACK_SHEET_SECRET: 'abc' });
+  assert.equal(short[0], null);
+  assert.match(short[1][0], /64 hex characters/);
+});

@@ -19,6 +19,8 @@ const { createHost } = require('./match/host');
 const { registerLobbyRoutes, registerProbeRoutes } = require('./routes/legacy/lobby');
 const { createInternalRouter } = require('./routes/internal');
 const { registerStorageRoutes } = require('./routes/legacy/storage');
+const { createFeedbackForwarder } = require('./feedback/forwarder');
+const { createFeedbackSheetStore } = require('./storage/feedback');
 
 // Ensure fatal errors have a dedicated log file outside stdout/stderr.
 const fatalLogDir = path.join(__dirname, '..', 'logs');
@@ -134,6 +136,23 @@ async function main() {
   const admission = createAdmission({ env, config });
   admission.start();
   await listen(createPublicApp(null, { v1: { env, remote, match, admission } }), env.PUBLIC_PORT, env.BIND_HOST, 'public');
+  startFeedbackForwarder(env, config);
+}
+
+// RJ 489: feedback rows go to the Player Feedback sheet only when the box's .env names it (ops/feedback/README.md);
+// without it they wait in the database as `pending`.
+function startFeedbackForwarder(env, config) {
+  for (const w of env.FEEDBACK_SHEET_WARNINGS) log.warn(`[feedback] ${w}`);
+  if (!env.FEEDBACK_SHEET) {
+    log.info('[feedback] no sheet configured: feedback is kept in the database and not forwarded');
+    return;
+  }
+  if (typeof fetch !== 'function') {
+    log.warn(`[feedback] this Node (${process.version}) has no fetch: feedback is not forwarded (the brain needs Node 20)`);
+    return;
+  }
+  createFeedbackForwarder({ ...env.FEEDBACK_SHEET, config, store: createFeedbackSheetStore() }).start();
+  log.info('[feedback] forwarding to the sheet every 30 s');
 }
 
 if (require.main === module) {

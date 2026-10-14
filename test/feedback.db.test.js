@@ -205,3 +205,35 @@ test('the sheet store: due rows oldest first, the IF(anonymized_at) mark, backof
   assert.equal(r.sheet_state, 'done_anon');
   assert.equal(await store.markSent([ids[0]], t), 0, 'markSent touches only pending rows');
 });
+
+test('the forwarder over the real table: a batch, an anonymise while it is out, then the anonymize op', { skip }, async () => {
+  const { createFeedbackForwarder } = require('../src/feedback/forwarder');
+  await getDB().query("UPDATE feedback SET sheet_state = 'done_anon'");
+  await getDB().query("INSERT INTO users (username, email, password) VALUES ('Racer', 'r@x.io', 'h')");
+  const [[u]] = await getDB().query("SELECT user_id FROM users WHERE email = 'r@x.io'");
+  const t = Date.UTC(2026, 9, 17, 12, 0, 0);
+  const ids = [uuid(), uuid()];
+  for (const [i, id] of ids.entries()) {
+    await insertFeedback({ id, received_ms: t - 10 + i, written_at: null, user_id: i === 0 ? u.user_id : null,
+      username: i === 0 ? 'Racer' : null, install_id: null, ip: '9.9.9.9', build: null, platform: null, env: 'dev',
+      tags: [], message: `=1+1 ${i} 🎮`, context: {} });
+  }
+  const posts = [];
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body);
+    posts.push(body);
+    if (body.op === 'append') await anonymizeFeedbackForUser(u.user_id, { now: t });
+    const json = { ok: true, ids: body.rows.map((r) => r['Feedback ID']) };
+    return { ok: true, status: 200, text: async () => JSON.stringify(json) };
+  };
+  const view = defaultView('dev');
+  const f = createFeedbackForwarder({ url: 'https://example.invalid/exec', secret: 's', config: () => view,
+    store: createFeedbackSheetStore(getDB()), fetchImpl, now: () => t, logger: { info() {}, warn() {}, error() {} } });
+  const r = await f.tick();
+  assert.deepEqual(r.append, { sent: 2, confirmed: 2 });
+  assert.deepEqual(posts[0].rows.map((x) => [x['Feedback ID'], x.Player, x.Feedback]),
+    [[ids[0], `Racer (#${u.user_id})`, '=1+1 0 🎮'], [ids[1], 'anonymous', '=1+1 1 🎮']]);
+  assert.deepEqual([posts[1].op, posts[1].rows], ['anonymize', [{ 'Feedback ID': ids[0] }]]);
+  assert.deepEqual([(await row(ids[0])).sheet_state, (await row(ids[1])).sheet_state], ['done_anon', 'sent']);
+  assert.ok((await row(ids[1])).sheet_sent_at, 'sheet_sent_at set');
+});
