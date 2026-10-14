@@ -5,4 +5,5 @@ module.exports = {
   ...require('./userStats'),
   ...require('./accolades'),
   ...require('./playerCard'),
+  ...require('./feedback'),
 };

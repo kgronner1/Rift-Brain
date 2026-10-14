@@ -40,7 +40,8 @@ test('a fetched document replaces the defaults field by field; a bad field keeps
   assert.deepEqual(v.gates.min_build, { default: 10, android: 20 });
   assert.equal(v.gates.min_wire, 1);
   assert.equal(v.gates.maintenance.scope, 'multiplayer');
-  assert.deepEqual(v.server.rate_limits, { login_per_min_ip: 10, login_per_min_account: 7, restore_per_min_credential: 30 });
+  assert.deepEqual(v.server.rate_limits, { login_per_min_ip: 10, login_per_min_account: 7, restore_per_min_credential: 30,
+    feedback_per_min_ip: 10, feedback_per_day_ip: 200 });
   assert.deepEqual(v.messages, { AUTH_INVALID: { message: 'Nope.' } });
   for (const p of ['gates.min_wire', 'server.rate_limits.login_per_min_ip', 'gates.maintenance.scope', 'messages.bad']) {
     assert.ok(log.lines.some((l) => l.startsWith(`[CONFIG] rejected ${p}`)), p);
@@ -84,7 +85,8 @@ test('no CONFIG_URL: the compiled defaults, the open gates and spec 4.5\'s limit
   const v = await r.start();
   assert.equal(v.source, 'defaults');
   assert.equal(v.gates.maintenance.active, false);
-  assert.deepEqual(v.server.rate_limits, { login_per_min_ip: 10, login_per_min_account: 5, restore_per_min_credential: 30 });
+  assert.deepEqual(v.server.rate_limits, { login_per_min_ip: 10, login_per_min_account: 5, restore_per_min_credential: 30,
+    feedback_per_min_ip: 10, feedback_per_day_ip: 200 });
   assert.equal(v.server.admission.session_refresh_grace_sec, 86400);
   r.stop();
 });

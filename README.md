@@ -59,6 +59,8 @@ src/middleware/         /v1's request id, client-header gates, session auth, rat
 src/auth/               tokens (sign/verify, the lobby key) and device credentials (RJ 465)
 src/routes/v1/          API v1 (RJ 465); /v1/match/join and /v1/queue's lobby kind (RJ 466); its admission kind (RJ 468)
 src/admission/          the admission queue in front of sign-in (RJ 468, spec M6), in process memory
+src/feedback/           player feedback (RJ 488/489): the entry's cleaning, the sheet's row, the sheet forwarder
+ops/feedback/           the Player Feedback sheet's Apps Script and its runbook (RJ 489)
 src/log.js              every log line, with tokens, credentials and passwords redacted (RJ 465)
 fixtures/               join_token_v1.txt and its builder: the client's cross-language token test (RJ 465)
 test/                   npm test (node --test); pure tests need no database
@@ -381,3 +383,19 @@ an alpha brain and a local HTTPS config server, runs every drill in both modes, 
 first publish to see it restore, and shows drills 2 and 7 failing on a broken setup.
 
 The cutover runbook is infra/README.md, "The cutover, in order".
+
+## Player feedback (RJ 488, RJ 489)
+
+`POST /v1/feedback` takes a player's note, signed in or not (Wobble Planet `specs/player-feedback.md` is the plan; the
+contract is Wobble Planet `docs/backend-api.md`, "Player feedback"). The `feedback` table (`migrations/0003_feedback.sql`, utf8mb4) is the source of truth; the
+forwarder copies it to the Player Feedback sheet through an Apps Script web app. Setup, the box's `.env` and redeploys:
+`ops/feedback/README.md`.
+
+- **Who:** a valid bearer -> its user and their username at receipt; no bearer -> anonymous (`X-RJ-Install` kept only
+  when it is a UUID); a bad or expired bearer -> `AUTH_REQUIRED` / `AUTH_EXPIRED`.
+- **Refused only when malformed** (`VALIDATION`: the id is not a UUID, the message is not a non-blank string). The rest
+  is repaired: the message cut to 2000 code points, unknown tags dropped, `written_at` cut to 40, a context over 4 KB
+  kept as `{"truncated": true}` plus the top-level keys that fit. A repeat id answers ok and changes nothing.
+- **Limits:** `server.rate_limits.feedback_per_min_ip` and `feedback_per_day_ip`. The brain never reads `flags.feedback`.
+- **Account deletion** (RJ 473) calls `storage.anonymizeFeedbackForUser(userId)`: the feedback stays, nothing names the
+  player, and the sheet's Player cell becomes `deleted account`.

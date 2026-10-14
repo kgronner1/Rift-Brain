@@ -16,7 +16,17 @@ const FIRST_WIRE = 1;
 const MAINTENANCE_SCOPES = ['multiplayer', 'app'];
 const NOTICE_LEVELS = ['info', 'warning', 'critical'];
 const ACTION_KINDS = ['dismiss', 'retry', 'open_url', 'open_store', 'login'];
-const FLAG_NAMES = ['multiplayer', 'quickplay', 'private_lobbies', 'account_creation'];
+// feedback (RJ 488): the client hides its Feedback buttons when false. The brain never reads it, so a stale config
+// cannot make /v1/feedback refuse an entry the client then deletes.
+const FLAG_NAMES = ['multiplayer', 'quickplay', 'private_lobbies', 'account_creation', 'feedback'];
+// server.rate_limits: every key is per minute unless its name says otherwise; [lo, hi] for each.
+const RATE_LIMITS = Object.freeze({
+  login_per_min_ip: [1, 100000],
+  login_per_min_account: [1, 100000],
+  restore_per_min_credential: [1, 100000],
+  feedback_per_min_ip: [1, 100000],
+  feedback_per_day_ip: [1, 1000000],
+});
 const MESSAGE_MAX = 280;
 const DOCUMENT_MAX_BYTES = 64 * 1024;
 // A config document is public. Every key is a known field already (no "session_key" can get in), so what is left
@@ -272,7 +282,7 @@ function validateDocument(doc, { env, domain = DOMAIN } = {}) {
 
   if ('server' in doc && c.object('server', doc.server)) {
     const s = doc.server;
-    c.keys('server', s, ['admission', 'lobby_queue_max', 'rate_limits']);
+    c.keys('server', s, ['admission', 'lobby_queue_max', 'rate_limits', 'feedback_sheet_per_day']);
     if ('admission' in s && c.object('server.admission', s.admission)) {
       const a = s.admission;
       c.keys('server.admission', a, ['enabled', 'rate_per_min', 'burst', 'grant_ttl_sec', 'ticket_ttl_sec',
@@ -287,11 +297,13 @@ function validateDocument(doc, { env, domain = DOMAIN } = {}) {
     if ('lobby_queue_max' in s) c.int('server.lobby_queue_max', s.lobby_queue_max, 0, 100000);
     if ('rate_limits' in s && c.object('server.rate_limits', s.rate_limits)) {
       const r = s.rate_limits;
-      c.keys('server.rate_limits', r, ['login_per_min_ip', 'login_per_min_account', 'restore_per_min_credential']);
-      for (const k of ['login_per_min_ip', 'login_per_min_account', 'restore_per_min_credential']) {
-        if (k in r) c.int(`server.rate_limits.${k}`, r[k], 1, 100000);
+      c.keys('server.rate_limits', r, Object.keys(RATE_LIMITS));
+      for (const [k, [lo, hi]] of Object.entries(RATE_LIMITS)) {
+        if (k in r) c.int(`server.rate_limits.${k}`, r[k], lo, hi);
       }
     }
+    // RJ 489: the most feedback rows the forwarder sends to the sheet per UTC day; 0 sends none (rows wait).
+    if ('feedback_sheet_per_day' in s) c.int('server.feedback_sheet_per_day', s.feedback_sheet_per_day, 0, 100000);
   }
 
   checkSecrets(c, '', doc);
@@ -379,6 +391,8 @@ module.exports = {
   ENVS,
   SCHEMA,
   CLAMPS,
+  FLAG_NAMES,
+  RATE_LIMITS,
   validateDocument,
   newLocks,
   floorFor,

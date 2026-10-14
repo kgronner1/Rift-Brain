@@ -11,7 +11,7 @@
 // Node 16 has no global fetch: the default fetcher is https.get.
 
 const https = require('https');
-const { floorFor } = require('./remoteSchema');
+const { floorFor, RATE_LIMITS } = require('./remoteSchema');
 
 const POLL_MS = 30 * 1000;
 const FETCH_TIMEOUT_MS = 5000;
@@ -30,13 +30,15 @@ function defaultView(env) {
       min_wire: 1,
       maintenance: { active: false, scope: 'multiplayer', title: '', message: '', ends_at: null },
     },
-    flags: { multiplayer: true, quickplay: true, private_lobbies: true, account_creation: true },
+    flags: { multiplayer: true, quickplay: true, private_lobbies: true, account_creation: true, feedback: true },
     messages: {},
     server: {
       admission: { enabled: false, rate_per_min: 600, burst: 50, grant_ttl_sec: 120, ticket_ttl_sec: 600,
         session_refresh_grace_sec: 86400 },
       lobby_queue_max: 200,
-      rate_limits: { login_per_min_ip: 10, login_per_min_account: 5, restore_per_min_credential: 30 },
+      rate_limits: { login_per_min_ip: 10, login_per_min_account: 5, restore_per_min_credential: 30,
+        feedback_per_min_ip: 10, feedback_per_day_ip: 200 },
+      feedback_sheet_per_day: 1000,
     },
   };
 }
@@ -146,10 +148,11 @@ function mergeDocument(prev, doc) {
     } else if ('admission' in s) reject('server.admission', 'must be an object');
     takeInt(s, 'lobby_queue_max', view.server, 'lobby_queue_max', 0, 100000, 'server.lobby_queue_max');
     if (isObject(s.rate_limits)) {
-      for (const k of ['login_per_min_ip', 'login_per_min_account', 'restore_per_min_credential']) {
-        takeInt(s.rate_limits, k, view.server.rate_limits, k, 1, 100000, `server.rate_limits.${k}`);
+      for (const [k, [lo, hi]] of Object.entries(RATE_LIMITS)) {
+        takeInt(s.rate_limits, k, view.server.rate_limits, k, lo, hi, `server.rate_limits.${k}`);
       }
     } else if ('rate_limits' in s) reject('server.rate_limits', 'must be an object');
+    takeInt(s, 'feedback_sheet_per_day', view.server, 'feedback_sheet_per_day', 0, 100000, 'server.feedback_sheet_per_day');
   } else if ('server' in doc) reject('server', 'must be an object');
 
   return { view, rejected };

@@ -165,6 +165,7 @@ function loadEnv(raw = process.env) {
   }
 
   const mysql = readMysql(raw, problems);
+  const feedbackSheet = readFeedbackSheet(raw);
 
   if (problems.length) throw new EnvError(problems);
 
@@ -185,7 +186,40 @@ function loadEnv(raw = process.env) {
     // Each game server's stdout and stderr, as lobby-<id>.log (match/host.js caps them). null: discarded.
     SERVER_LOGS_DIR: serverLogsDir,
     CONFIG_URL: configUrl,
+    // RJ 489: where the feedback forwarder sends rows ({url, secret}), or null: rows wait in the database.
+    FEEDBACK_SHEET: feedbackSheet.sheet,
+    // Why a half-set or malformed pair was ignored; app.js logs each at boot.
+    FEEDBACK_SHEET_WARNINGS: Object.freeze(feedbackSheet.warnings),
   });
+}
+
+// FEEDBACK_SHEET_URL and FEEDBACK_SHEET_SECRET (RJ 489, ops/feedback/README.md): both optional, and both or neither.
+// A bad pair is a warning, not a refusal to boot: an optional sheet setting must never take logins and matchmaking
+// down with it. The URL must be https; the secret 64 hex characters (openssl rand -hex 32), like the other keys.
+function readFeedbackSheet(raw) {
+  const warnings = [];
+  const url = isBlank(raw.FEEDBACK_SHEET_URL) ? null : String(raw.FEEDBACK_SHEET_URL).trim();
+  const secret = isBlank(raw.FEEDBACK_SHEET_SECRET) ? null : String(raw.FEEDBACK_SHEET_SECRET).trim();
+  if (url === null && secret === null) return { sheet: null, warnings };
+  if (url === null || secret === null) {
+    warnings.push(`FEEDBACK_SHEET_URL and FEEDBACK_SHEET_SECRET go together, and only ${url === null ? 'the secret' : 'the URL'} is set: feedback is not forwarded`);
+    return { sheet: null, warnings };
+  }
+  let ok = true;
+  try {
+    if (new URL(url).protocol !== 'https:') {
+      warnings.push('FEEDBACK_SHEET_URL must be https: feedback is not forwarded');
+      ok = false;
+    }
+  } catch (e) {
+    warnings.push('FEEDBACK_SHEET_URL is not a URL: feedback is not forwarded');
+    ok = false;
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(secret)) {
+    warnings.push('FEEDBACK_SHEET_SECRET must be 64 hex characters (openssl rand -hex 32): feedback is not forwarded');
+    ok = false;
+  }
+  return { sheet: ok ? Object.freeze({ url, secret }) : null, warnings };
 }
 
 module.exports = { loadEnv, loadMysqlEnv, EnvError, ENVS, LEGACY_DEFAULTS };
