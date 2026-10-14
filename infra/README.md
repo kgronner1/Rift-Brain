@@ -114,11 +114,81 @@ Neither touches `rift-brain` (legacy), Caddy, the `.env` files or the databases 
 node, after an `npm ci` by the system npm. When neither environment uses Node 20 any more:
 `sudo dnf remove nodejs20 nodejs20-npm` (leaves the default node, npm and npx as they are; the test checks it).
 
+## Monitoring (RJ 487)
+
+Email alerts when the box strains, before players notice. The plan, with its reasoning, is Wobble Planet's
+`specs/monitoring-alpha.md`; how to read and answer an alert is its `docs/backend-ops.md`, "Monitoring". Everything
+emails the address in `RJ_ALERT_EMAIL` (`deploy.env`; never in git, this repository is public), when an alarm starts
+and again when it clears.
+
+| Alarm | Stack, region | Fires when |
+|---|---|---|
+| `rj-box-status-check` | rj-box, us-west-1 | `StatusCheckFailed` >= 1 for 2 x 5 min |
+| `rj-box-cpu-high` | rj-box | `CPUUtilization` > 70% for 3 x 5 min |
+| `rj-box-cpu-credits-low` | rj-box | `CPUCreditBalance` < 30 (of 144) for 2 x 5 min |
+| `rj-box-memory-low` | rj-box | `RiftJumpers/Box MemAvailableMB` < 200 for 2 x 5 min |
+| `rj-box-matches-high` | rj-box | `RiftJumpers/Box ActiveMatches` (dev + alpha) > 2 for 2 x 5 min: resize (RJ 474) |
+| `rj-box-reporter-silent` | rj-box | no `MemAvailableMB` sample for 15 min (missing data breaches) |
+| `rj-alpha-api-down` | rj-edge, us-east-1 | Route 53's HTTPS check of `https://api.<domain>/` fails for 2 x 1 min |
+
+rj-box's alarms send to the SNS topic `rj-alerts` (us-west-1); `rj-alpha-api-down` to `rj-alerts-edge` (us-east-1),
+because Route 53's metrics exist only there. Each topic's email subscription needs one click on "Confirm
+subscription" in AWS's email before anything is delivered.
+
+**The reporter.** `infra/box/report_metrics.sh`, installed by provision.sh's `metrics` step as
+`/usr/local/bin/rj-report-metrics`, runs from `rj-metrics.timer` every 5 minutes (at :00:30, :05:30, ...) and sends
+`MemAvailableMB`, `SwapUsedMB` and `ActiveMatches` (a total, and per `Env`) to the namespace `RiftJumpers/Box`. A
+match is a process whose command line starts with `/opt/rj/<env>/servers/`. It is box-wide: either environment's
+provisioning installs it. `journalctl -u rj-metrics` shows each run; `sudo systemctl start rj-metrics` runs one now.
+`infra/test/report_metrics.sh` tests it, its units and the provision step in Docker.
+
+**Its credentials** are the instance profile `rj-box-metrics`, made by hand in the console (`rj-deploy` holds no IAM
+rights, deliberately): a role trusted by EC2 with one inline policy,
+```json
+{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "cloudwatch:PutMetricData", "Resource": "*",
+  "Condition": {"StringEquals": {"cloudwatch:namespace": "RiftJumpers/Box"}}}]}
+```
+attached to the box with EC2 -> the instance -> Actions -> Security -> Modify IAM role.
+
+**The deployer** needs, beside its managed policies (`CloudWatchReadOnlyAccess` cannot make an alarm), an inline
+policy `rj-alerts` on `rj-deploy`:
+```json
+{"Version": "2012-10-17", "Statement": [
+  {"Sid": "RjAlertTopics", "Effect": "Allow", "Action": "sns:*",
+   "Resource": ["arn:aws:sns:us-west-1:<account>:rj-alerts*", "arn:aws:sns:us-east-1:<account>:rj-alerts*"]},
+  {"Sid": "RjAlarms", "Effect": "Allow",
+   "Action": ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:SetAlarmState",
+              "cloudwatch:EnableAlarmActions", "cloudwatch:DisableAlarmActions",
+              "cloudwatch:TagResource", "cloudwatch:UntagResource"],
+   "Resource": ["arn:aws:cloudwatch:us-west-1:<account>:alarm:rj-*", "arn:aws:cloudwatch:us-east-1:<account>:alarm:rj-*"]}]}
+```
+
+| # | Command | Changes | Undo |
+|---|---|---|---|
+| 1 | by hand: the role, `rj-deploy`'s policy, and `RJ_ALERT_EMAIL=<address>` in `deploy.env` | IAM | "Undo", step 5 |
+| 2 | `bash infra/deploy_stacks.sh --apply --box-only` | rj-box: topic `rj-alerts` + its subscription, the six `rj-box-*` alarms. `rj-box-reporter-silent` alarms until step 4 | "Undo", step 5 |
+| 3 | by hand: attach `rj-box-metrics` to the box; no restart | the instance's IAM role | "Undo", step 5 |
+| 4 | `bash infra/provision_box.sh --env dev --apply` | the reporter, its two units, the timer enabled; one run | "Undo", step 5 |
+| 5 | `bash infra/deploy_stacks.sh --apply --edge-only` | rj-edge: health check `rj-alpha-api`, topic `rj-alerts-edge` + subscription, `rj-alpha-api-down` | "Undo", step 5 |
+
+Test an alarm's email path without load: `aws --profile rj cloudwatch set-alarm-state --region us-west-1 --alarm-name
+rj-box-cpu-high --state-value ALARM --state-reason test`; the next evaluation puts it back and sends the OK.
+
 ## Undo
 
 Until cutover (spec 7a) nothing here touches the legacy brain, `rift_brain`, its binary, TCP 3000 or
 UDP 8080-8085, and today's builds never read any of it. Newest first:
 
+5. **Monitoring** (RJ 487; "Monitoring"). Remove its resources from `rj-box.yaml` and `rj-edge.yaml` and re-run
+   `deploy_stacks.sh --apply` (the topics, subscriptions, alarms and the health check go; nothing else changes). On the
+   box:
+   ```
+   sudo systemctl disable --now rj-metrics.timer
+   sudo rm -f /etc/systemd/system/rj-metrics.service /etc/systemd/system/rj-metrics.timer /usr/local/bin/rj-report-metrics
+   sudo systemctl daemon-reload
+   ```
+   Then in the console: EC2 -> the instance -> Actions -> Security -> Modify IAM role -> no role; delete the role
+   `rj-box-metrics` in IAM, and the inline policy `rj-alerts` on `rj-deploy`. The custom metrics expire by themselves.
 4. **Alpha** (its steps 2, 4 and 5), over SSH. Leaves dev and Caddy running:
    ```
    pm2 delete rift-brain-alpha && pm2 save

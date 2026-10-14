@@ -32,6 +32,9 @@
 #      new interpreter included) restarts this app alone: pm2 delete + start --only it. The plan says when it will
 #   6. checks: the brain answers on 127.0.0.1 (public and internal listeners), and through Caddy over HTTPS; reports
 #      what the per-protocol manifest (servers/manifest.json, written by Wobble Planet's deploy_server.sh) deploys
+#   7. the box-wide metrics reporter (RJ 487), whichever environment runs it: /usr/local/bin/rj-report-metrics and
+#      the systemd units rj-metrics.service + rj-metrics.timer (every 5 min), enabled. Warns when the instance has no
+#      IAM role, since the reporter then cannot send. Removing it: infra/README.md, "Undo", step 6
 #
 # Never touched: the legacy rift-brain pm2 app, its checkout and .env, the rift_brain database (read only, by
 # mysqldump), the legacy server binary, TCP 3000 and UDP 8080-8085.
@@ -65,7 +68,7 @@ NODE_BIN="${RJ_NODE_BIN:-/usr/bin/node-$NODE_MAJOR}"
 NPM_BIN="${RJ_NPM_BIN:-/usr/bin/npm-$NODE_MAJOR}"
 TODAY="${RJ_TODAY:-$(date -u +%F)}"
 # Steps a test can switch off (infra/test/provision_db.sh runs the database step alone).
-STEPS="${RJ_PROVISION_STEPS:-preflight memory node caddy layout brain dotenv database pm2 verify}"
+STEPS="${RJ_PROVISION_STEPS:-preflight memory node caddy layout brain dotenv database pm2 verify metrics}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -681,7 +684,50 @@ step_verify() {
   else say "WARNING: https://$API_HOST/ does not answer yet. DNS (rj-box) must point here and TCP 80/443 be open; see journalctl -u caddy"; fi
 }
 
-for s in preflight memory node caddy layout brain dotenv database pm2 verify; do
+# --- 7. the metrics reporter (RJ 487) ------------------------------------------------------------------------------
+# Box-wide: one reporter counts every environment's matches, so dev's run and alpha's install the same files.
+METRICS_UNIT_DIR="${RJ_SYSTEMD_DIR:-/etc/systemd/system}"
+METRICS_BIN="${RJ_METRICS_BIN:-/usr/local/bin/rj-report-metrics}"
+step_metrics() {
+  CHANGED=0
+  install_file "$HERE/report_metrics.sh" "$METRICS_BIN" 0755
+  local bin_changed=$CHANGED
+  CHANGED=0
+  install_file "$HERE/rj-metrics.service" "$METRICS_UNIT_DIR/rj-metrics.service" 0644
+  install_file "$HERE/rj-metrics.timer" "$METRICS_UNIT_DIR/rj-metrics.timer" 0644
+  local units_changed=$CHANGED
+  local role="" token
+  token="$(curl -fsS -m 2 -X PUT http://169.254.169.254/latest/api/token \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)"
+  if [ -n "$token" ]; then
+    role="$(curl -fsS -m 2 -H "X-aws-ec2-metadata-token: $token" \
+      http://169.254.169.254/latest/meta-data/iam/security-credentials/ 2>/dev/null || true)"
+  fi
+  if [ -n "$role" ]; then say "instance role: $role (the reporter sends with it)"
+  else say "WARNING: the instance has no IAM role, so rj-report-metrics cannot send: attach rj-box-metrics (infra/README.md, \"Monitoring\")"; fi
+  if [ "$APPLY" = 0 ]; then
+    if systemctl is-enabled --quiet rj-metrics.timer 2>/dev/null; then
+      [ "$units_changed$bin_changed" = 00 ] || plan "systemctl daemon-reload; rj-metrics.timer stays enabled"
+    else
+      plan "systemctl enable --now rj-metrics.timer (rj-report-metrics every 5 min)"
+    fi
+    return
+  fi
+  [ "$units_changed" = 0 ] || sudo systemctl daemon-reload
+  if systemctl is-enabled --quiet rj-metrics.timer 2>/dev/null && systemctl is-active --quiet rj-metrics.timer; then
+    [ "$units_changed" = 0 ] || sudo systemctl restart rj-metrics.timer
+    say "rj-metrics.timer is enabled and running"
+  else
+    sudo systemctl enable --now rj-metrics.timer
+    say "enabled rj-metrics.timer (every 5 min)"
+  fi
+  if [ -n "$role" ]; then
+    if sudo systemctl start rj-metrics.service; then say "PASS rj-report-metrics: $(sudo journalctl -u rj-metrics --no-pager -n 1 -o cat 2>/dev/null || true)"
+    else say "WARNING: rj-report-metrics failed: journalctl -u rj-metrics -n 20"; fi
+  fi
+}
+
+for s in preflight memory node caddy layout brain dotenv database pm2 verify metrics; do
   step_on "$s" || continue
   "step_$s"
 done

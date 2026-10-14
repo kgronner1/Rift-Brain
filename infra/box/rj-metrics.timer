@@ -1,0 +1,11 @@
+# Installed by infra/box/provision.sh (RJ 487). Every 5 minutes, 30 s into the period, so each sample lands in its own
+# 5-minute CloudWatch period (rj-box-reporter-silent counts samples per period).
+[Unit]
+Description=Rift Jumpers: send the box's metrics every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5:30
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
