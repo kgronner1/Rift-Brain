@@ -387,7 +387,7 @@ The cutover runbook is infra/README.md, "The cutover, in order".
 ## Player feedback (RJ 488, RJ 489)
 
 `POST /v1/feedback` takes a player's note, signed in or not (Wobble Planet `specs/player-feedback.md` is the plan; the
-contract row is spec 4.10). The `feedback` table (`migrations/0003_feedback.sql`, utf8mb4) is the source of truth; the
+contract is Wobble Planet `docs/backend-api.md`, "Player feedback"). The `feedback` table (`migrations/0003_feedback.sql`, utf8mb4) is the source of truth; the
 forwarder copies it to the Player Feedback sheet through an Apps Script web app. Setup, the box's `.env` and redeploys:
 `ops/feedback/README.md`.
 
