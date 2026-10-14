@@ -30,4 +30,19 @@ function requireSession({ keyHex, serverEnv, now = () => Date.now() }) {
   };
 }
 
-module.exports = { requireSession, bearer };
+// A route where the session is optional (RJ 488, /v1/feedback): no bearer token -> req.session = null and on; a bearer
+// token is held to requireSession's rules, so a bad or expired one answers AUTH_REQUIRED / AUTH_EXPIRED and the client
+// restores and replays as on a locked route. An Authorization header that is not a bearer token counts as none.
+function optionalSession(opts) {
+  const required = requireSession(opts);
+  return function optionalSessionMiddleware(req, res, next) {
+    if (bearer(req) === null) {
+      req.session = null;
+      next();
+      return;
+    }
+    required(req, res, next);
+  };
+}
+
+module.exports = { requireSession, optionalSession, bearer };
