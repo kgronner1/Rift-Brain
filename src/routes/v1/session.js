@@ -72,4 +72,4 @@ function registerSessionRoutes(router, deps) {
   }));
 }
 
-module.exports = { registerSessionRoutes };
+module.exports = { registerSessionRoutes, PASSWORD_MAX };
