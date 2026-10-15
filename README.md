@@ -104,6 +104,7 @@ npm run migrate -- --status      # list applied and pending, change nothing
 | `0002_hardening.sql` | `UNIQUE` on `users.username` and `users.email`; `user_credentials`; drops `users.access_token` |
 | `0003_feedback.sql` | the `feedback` table (RJ 488) |
 | `0004_guests.sql` | `users.is_guest`; `users.email` and `users.password` NULL-able; the cull's index (RJ 493) |
+| `0005_stats_defaults.sql` | `user_stats.num_jumps_alltime` and `mp_num_items_stolen_alltime` default to 0, NULLs backfilled (RJ 495) |
 
 **Making `0001_baseline.sql`** (once, by hand, on the box). Over SSH:
 
