@@ -1,5 +1,5 @@
 // Today's account, stats, accolade and player-card routes, unchanged in path and shape.
-// /v1/* (M3) and /internal/v1/* (M4) replace them; these go at cutover.
+// /v1/* (M3) and /internal/v1/* (M4) replace them; only the legacy brain serves them (RJ 494), and they go at cutover.
 
 const log = require('../../log');
 const fs = require('fs').promises;

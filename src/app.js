@@ -40,9 +40,10 @@ function logFatalError(err, context) {
 
 // The public app: /v1 (RJ 465) when `v1` is given, and today's routes, unchanged. Takes the registry so tests can
 // drive it without a database. v1: {env, remote, now?, match?} (routes/v1/index.js).
-// lobbies: the legacy registry (match/lobbies.js), whose matchmaking routes only the legacy brain serves; null in a new
-// environment, which matches through /v1/match/join (M4) and keeps only the two probes (GET / and
-// /server_health_check) of today's lobby routes.
+// lobbies: the legacy registry (match/lobbies.js); null in a new environment. Only the legacy brain serves today's
+// matchmaking and storage routes. A new environment matches through /v1/match/join (M4) and keeps only the two probes
+// (GET / and /server_health_check): the storage routes take a user_id without any auth, so serving them there let
+// anyone write any account's stats (RJ 494).
 function createPublicApp(lobbies, { v1 } = {}) {
   const app = express();
   // Caddy on the same box is the only proxy: req.ip is the client's address behind it (spec 4.9).
@@ -52,9 +53,12 @@ function createPublicApp(lobbies, { v1 } = {}) {
   // Keep request logging minimal and low overhead; through log.js, like every other line.
   app.use(morgan('tiny', { stream: log.stream }));
 
-  if (lobbies) registerLobbyRoutes(app, lobbies);
-  else registerProbeRoutes(app);
-  registerStorageRoutes(app);
+  if (lobbies) {
+    registerLobbyRoutes(app, lobbies);
+    registerStorageRoutes(app);
+  } else {
+    registerProbeRoutes(app);
+  }
 
   // Treat unexpected route errors as fatal and return a safe 500 response.
   app.use(function (err, req, res, next) {

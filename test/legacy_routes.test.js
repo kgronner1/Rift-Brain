@@ -5,6 +5,40 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createPublicApp } = require('../src/app');
 const { createLobbyRegistry } = require('../src/match/lobbies');
+const { createRemoteConfig, defaultView } = require('../src/config/remote');
+
+// Today's storage routes, every one (src/routes/legacy/storage.js).
+const STORAGE_ROUTES = [
+  ['POST', '/create_user'], ['POST', '/login_user'], ['POST', '/passive_login_user'], ['POST', '/app_version_compatibility'],
+  ['POST', '/post_match_player_stats_update'], ['POST', '/single_player_stats_sync'], ['POST', '/player_accolades_sync'],
+  ['POST', '/user_stats_columns'], ['POST', '/leaderboard_top_list'], ['POST', '/user_single_stat'],
+  ['POST', '/user_all_stats'], ['POST', '/user_all_accolades'],
+  ['GET', '/player_card?user_id=1'], ['GET', '/player_cards?user_ids=1,2'], ['PUT', '/player_card'],
+];
+
+// A new environment's public app (ENV dev): /v1 and no legacy registry, as app.js main() builds it.
+async function startNewEnv(t) {
+  t.mock.method(console, 'log', () => {});
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(console, 'error', () => {});
+  const remote = createRemoteConfig({ env: 'dev', url: null, log: { info() {}, warn() {}, error() {} } });
+  remote._set(defaultView('dev'));
+  const app = createPublicApp(null, { v1: { env: { ENV: 'dev', SESSION_KEY: 'cd'.repeat(32) }, remote } });
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  return async (method, p, body) => {
+    const init = { method };
+    if (body !== undefined) {
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = JSON.stringify(body);
+    }
+    const r = await fetch(base + p, init);
+    return { status: r.status, type: r.headers.get('content-type') || '', text: await r.text() };
+  };
+}
 
 async function startApp(t) {
   t.mock.method(console, 'log', () => {});
@@ -82,4 +116,22 @@ test('the storage routes are mounted and validate before touching the database',
     { status: 400, body: { success: false, message: 'Invalid user_id' } });
   assert.deepEqual(await post('/single_player_stats_sync', {}),
     { status: 400, body: { success: false, message: 'Missing required field: user_id' } });
+});
+
+test('RJ 494: a new environment serves none of the storage routes (404), only the probes; the legacy brain still does', async (t) => {
+  const call = await startNewEnv(t);
+  for (const [method, p] of STORAGE_ROUTES) {
+    const r = await call(method, p, method === 'GET' ? undefined : { user_id: 1, stats: { _last_updated: 1 } });
+    assert.equal(r.status, 404, `${method} ${p}`);
+    const path = p.split('?')[0];
+    assert.match(r.text, new RegExp(`Cannot ${method} ${path}`), `${method} ${p}: Express's own 404, nothing of the route's`);
+    assert.doesNotMatch(r.text, /success|user_id|stack|at /i, `${method} ${p}`);
+  }
+  assert.deepEqual([(await call('GET', '/')).status, (await call('GET', '/')).text], [200, '0']);
+  assert.deepEqual([(await call('GET', '/server_health_check')).status, (await call('GET', '/server_health_check')).text], [200, 'true']);
+  assert.equal((await call('GET', '/join')).status, 404, 'nor the legacy matchmaking');
+
+  const { post } = await startApp(t);
+  assert.deepEqual(await post('/user_all_stats', { user_id: 'x' }),
+    { status: 400, body: { success: false, message: 'Invalid user_id' } }, 'the legacy brain serves them (the 404s mean something)');
 });
