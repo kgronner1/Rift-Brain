@@ -101,6 +101,8 @@ npm run migrate -- --status      # list applied and pending, change nothing
 |---|---|
 | `0001_baseline.sql` | today's `rift_brain` schema, dumped from the box (not yet in git, see below) |
 | `0002_hardening.sql` | `UNIQUE` on `users.username` and `users.email`; `user_credentials`; drops `users.access_token` |
+| `0003_feedback.sql` | the `feedback` table (RJ 488) |
+| `0004_guests.sql` | `users.is_guest`; `users.email` and `users.password` NULL-able; the cull's index (RJ 493) |
 
 **Making `0001_baseline.sql`** (once, by hand, on the box). Over SSH:
 

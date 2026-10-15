@@ -142,3 +142,84 @@ test('the real baseline builds and hardens', { skip: skip || (!realBaseline && '
       assert.ok((await columns(conn, table)).includes('user_id'), table);
     }
   });
+
+// The real chain up to `upTo` (inclusive) in a temporary directory.
+function realMigrations(t, upTo) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rb-migrate-db-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  for (const f of fs.readdirSync(MIGRATIONS_DIR)) {
+    if (/^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) <= upTo) fs.copyFileSync(path.join(MIGRATIONS_DIR, f), path.join(dir, f));
+  }
+  return dir;
+}
+
+async function usersColumn(conn, name) {
+  const [[c]] = await conn.query(
+    `SELECT COLUMN_TYPE AS type, IS_NULLABLE AS nullable, CHARACTER_SET_NAME AS cs, COLLATION_NAME AS coll, COLUMN_DEFAULT AS def
+     FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = ?`, [name]);
+  return c;
+}
+
+test('RJ 493: 0004 on a populated users table keeps every row, adds is_guest 0, frees email and password, and reruns cleanly', { skip }, async (t) => {
+  const conn = await freshDatabase(t);
+  const dir = realMigrations(t, 3);
+  assert.deepEqual((await migrate(conn, { dir, log: quiet })).applied, ['0001_baseline.sql', '0002_hardening.sql', '0003_feedback.sql']);
+  for (let i = 1; i <= 40; i++) {
+    await conn.query('INSERT INTO users (username, email, password, last_login, created_date) VALUES (?, ?, ?, ?, NOW())',
+      [`pilot_${i}`, `p${i}@x.io`, `$2a$10$hash${i}`, i % 2 ? null : '2026-01-02 03:04:05']);
+    await conn.query('INSERT INTO user_stats (user_id, sp_most_jumps_in_a_run) VALUES (?, ?)', [i, i * 10]);
+  }
+  await conn.query("INSERT INTO user_credentials (user_id, token_hash, platform, install_id) VALUES (1, REPEAT('b', 64), 'ios', 'i')");
+  const before = { email: await usersColumn(conn, 'email'), password: await usersColumn(conn, 'password') };
+  assert.equal(before.email.nullable, 'NO', 'the measurement: 0001 makes them NOT NULL');
+  const [rowsBefore] = await conn.query('SELECT user_id, username, email, password, last_login, created_date FROM users ORDER BY user_id');
+
+  fs.copyFileSync(path.join(MIGRATIONS_DIR, '0004_guests.sql'), path.join(dir, '0004_guests.sql'));
+  assert.deepEqual((await migrate(conn, { dir, log: quiet })).applied, ['0004_guests.sql']);
+
+  const [rowsAfter] = await conn.query('SELECT user_id, username, email, password, last_login, created_date FROM users ORDER BY user_id');
+  assert.deepEqual(rowsAfter, rowsBefore, 'every row as it was');
+  const [[{ guests, n }]] = await conn.query('SELECT SUM(is_guest) AS guests, COUNT(*) AS n FROM users');
+  assert.deepEqual([Number(guests), Number(n)], [0, 40]);
+  for (const name of ['email', 'password']) {
+    const c = await usersColumn(conn, name);
+    assert.deepEqual([c.type, c.cs, c.coll], [before[name].type, before[name].cs, before[name].coll], `${name} keeps its type and collation`);
+    assert.equal(c.nullable, 'YES', name);
+  }
+  const isGuest = await usersColumn(conn, 'is_guest');
+  assert.deepEqual([isGuest.type, isGuest.nullable, String(isGuest.def)], ['tinyint(1)', 'NO', '0']);
+  const unique = await uniqueKeys(conn, 'users');
+  assert.ok(unique.includes('username') && unique.includes('email'), unique.join(' | '));
+  const [idx] = await conn.query(
+    `SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS cols FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND INDEX_NAME = 'ix_users_guest_login'`);
+  assert.equal(idx[0].cols, 'is_guest,last_login');
+  assert.equal(Number((await conn.query('SELECT COUNT(*) AS n FROM user_credentials'))[0][0].n), 1);
+  assert.equal(Number((await conn.query('SELECT SUM(sp_most_jumps_in_a_run) AS s FROM user_stats'))[0][0].s), 8200);
+
+  await conn.query(fs.readFileSync(path.join(dir, '0004_guests.sql'), 'utf8'));
+  assert.equal((await uniqueKeys(conn, 'users')).filter((k) => k === 'email').length, 1, 'a rerun adds nothing');
+  const [[{ k }]] = await conn.query(
+    "SELECT COUNT(DISTINCT INDEX_NAME) AS k FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND INDEX_NAME = 'ix_users_guest_login'");
+  assert.equal(Number(k), 1);
+
+  for (let i = 0; i < 50; i++) {
+    await conn.query('INSERT INTO users (username, email, password, is_guest) VALUES (?, NULL, NULL, 1)', [`Pilot-${1000 + i}`]);
+  }
+  assert.equal(Number((await conn.query('SELECT COUNT(*) AS n FROM users WHERE email IS NULL'))[0][0].n), 50, 'any number of NULL emails');
+  await assert.rejects(conn.query("INSERT INTO users (username, email, password) VALUES ('Pilot-1000', NULL, NULL)"), /Duplicate/);
+  await assert.rejects(conn.query("INSERT INTO users (username, email, password) VALUES ('other', 'p1@x.io', 'h')"), /Duplicate/);
+});
+
+test('RJ 493: 0004 also applies over a baselined copy of today\'s database (dev\'s history)', { skip }, async (t) => {
+  const conn = await freshDatabase(t);
+  const dir = migrationsDir(t);
+  await conn.query(FIXTURE_BASELINE);
+  await conn.query("INSERT INTO users (username, email, password) VALUES ('kept', 'k@x.io', 'h')");
+  await migrate(conn, { dir, baseline: true, log: quiet });
+  fs.copyFileSync(path.join(MIGRATIONS_DIR, '0004_guests.sql'), path.join(dir, '0004_guests.sql'));
+  assert.deepEqual((await migrate(conn, { dir, log: quiet })).applied, ['0002_hardening.sql', '0004_guests.sql']);
+  assert.equal((await usersColumn(conn, 'email')).nullable, 'YES');
+  assert.equal((await usersColumn(conn, 'email')).cs, 'utf8mb4', 'the copy\'s own character set, not the table default\'s guess');
+  assert.deepEqual((await conn.query('SELECT username, email, is_guest FROM users'))[0], [{ username: 'kept', email: 'k@x.io', is_guest: 0 }]);
+});

@@ -36,6 +36,18 @@ for _ in $(seq 1 60); do
 done
 sql() { docker exec -i "$NAME" mariadb -uroot -p"$PW" --batch --skip-column-names "$@"; }
 
+# Every migration in migrations/, as schema_migrations lists them ("1,2,3"), so a new one needs no edit here; a copy
+# marks 0001 a baseline, a fresh database applies them all.
+VERSIONS=""
+for f in "$REPO_DIR"/migrations/[0-9][0-9][0-9][0-9]_*.sql; do
+  v="$(basename "$f")"
+  v="${v%%_*}"
+  VERSIONS="${VERSIONS:+$VERSIONS,}$((10#$v))"
+done
+REST_ZEROS="$(tr ',' '\n' <<<"$VERSIONS" | tail -n +2 | sed 's/.*/,0/' | tr -d '\n')"
+COPY_BASELINES="1$REST_ZEROS"
+FRESH_BASELINES="0$REST_ZEROS"
+
 # The legacy database: the real baseline, two users.
 sql -e 'CREATE DATABASE rift_brain'
 sql rift_brain <"$REPO_DIR/migrations/0001_baseline.sql"
@@ -79,13 +91,13 @@ done
 pass ".env: chmod 600, three 32-byte keys, accepted by src/config/env.js"
 
 [ "$(sql -e 'SELECT COUNT(*) FROM rift_brain_dev.users')" = 2 ] || fail "dev has not the copied users"
-[ "$(sql -e "SELECT GROUP_CONCAT(version ORDER BY version), GROUP_CONCAT(baseline ORDER BY version) FROM rift_brain_dev.schema_migrations")" = $'1,2\t1,0' ] \
+[ "$(sql -e "SELECT GROUP_CONCAT(version ORDER BY version), GROUP_CONCAT(baseline ORDER BY version) FROM rift_brain_dev.schema_migrations")" = "$VERSIONS"$'\t'"$COPY_BASELINES" ] \
   || fail "dev migrations: $(sql -e 'SELECT version, baseline FROM rift_brain_dev.schema_migrations')"
 [ "$(sql -e "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='rift_brain_dev' AND TABLE_NAME='users' AND COLUMN_NAME='access_token'")" = 0 ] \
   || fail "dev still has users.access_token"
 [ "$(sql -e "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='rift_brain_dev' AND TABLE_NAME='user_credentials'")" = 1 ] \
   || fail "dev has no user_credentials"
-pass "dev: a copy of rift_brain's 2 users, 0001 baselined, 0002 applied"
+pass "dev: a copy of rift_brain's 2 users, 0001 baselined, the rest applied ($VERSIONS)"
 
 [ "$(sql -e "SELECT DISTINCT TABLE_SCHEMA FROM INFORMATION_SCHEMA.SCHEMA_PRIVILEGES WHERE GRANTEE LIKE '''rift_brain_dev''@%'")" = rift_brain_dev ] \
   || fail "rift_brain_dev's grants: $(sql -e "SHOW GRANTS FOR 'rift_brain_dev'@'%'")"
@@ -136,21 +148,21 @@ pass "an .env from before M4: PLAN names what it lacks and changes nothing; --ap
 sql rift_brain -e "INSERT INTO users (username, email, password, access_token) VALUES ('cat','cat@x.test','h3','t3')"
 provision --env dev --apply --recopy-db >"$WORK/recopy.log" 2>&1 || { cat "$WORK/recopy.log"; fail "recopy"; }
 [ "$(sql -e 'SELECT COUNT(*) FROM rift_brain_dev.users')" = 3 ] || fail "recopy did not take the new row"
-[ "$(sql -e "SELECT GROUP_CONCAT(version ORDER BY version) FROM rift_brain_dev.schema_migrations")" = 1,2 ] || fail "recopy migrations"
+[ "$(sql -e "SELECT GROUP_CONCAT(version ORDER BY version) FROM rift_brain_dev.schema_migrations")" = "$VERSIONS" ] || fail "recopy migrations"
 pass "--recopy-db: a fresh copy (3 users), baselined and migrated again"
 
 # --- alpha: fresh from migrations ---------------------------------------------------------------------------------
 provision --env alpha --recopy-db >/dev/null 2>&1 && fail "--recopy-db was accepted for alpha"
 provision --env alpha --apply >"$WORK/alpha.log" 2>&1 || { cat "$WORK/alpha.log"; fail "alpha apply"; }
 [ "$(sql -e 'SELECT COUNT(*) FROM rift_brain_alpha.users')" = 0 ] || fail "alpha is not empty"
-[ "$(sql -e "SELECT GROUP_CONCAT(version ORDER BY version), GROUP_CONCAT(baseline ORDER BY version) FROM rift_brain_alpha.schema_migrations")" = $'1,2\t0,0' ] \
+[ "$(sql -e "SELECT GROUP_CONCAT(version ORDER BY version), GROUP_CONCAT(baseline ORDER BY version) FROM rift_brain_alpha.schema_migrations")" = "$VERSIONS"$'\t'"$FRESH_BASELINES" ] \
   || fail "alpha migrations"
 [ "$(sql -e "SELECT DISTINCT TABLE_SCHEMA FROM INFORMATION_SCHEMA.SCHEMA_PRIVILEGES WHERE GRANTEE LIKE '''rift_brain_alpha''@%'")" = rift_brain_alpha ] \
   || fail "alpha grants"
 for line in PUBLIC_PORT=3002 GAME_PORTS=8090-8099; do
   grep -qx "$line" "$WORK/rj/alpha/brain/.env" || fail "alpha .env has no $line"
 done
-pass "alpha: built fresh from 0001 + 0002, its own user, ports 3002 / 8090-8099"
+pass "alpha: built fresh from every migration ($VERSIONS), its own user, ports 3002 / 8090-8099"
 
 AENV="$WORK/rj/alpha/brain/.env"
 for line in ENV=alpha INTERNAL_PORT=3102 MYSQL_DATABASE=rift_brain_alpha MYSQL_USER=rift_brain_alpha \
