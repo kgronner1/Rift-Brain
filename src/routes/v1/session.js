@@ -3,7 +3,9 @@
 //   {login: {id, password}}              password login: issues a credential and a session
 //   {credential: {user_id, token}, session?}   credential restore: a session (a refresh when `session` qualifies)
 // optional `grant` (admission, M6: when on, a request that is neither a refresh nor carrying a valid grant may answer
-// `queued`; it runs after the input checks and rate limits, before the database). ok: {user:{id,username}, session:{token,expires_in}, credential?}.
+// `queued`; it runs after the input checks and rate limits, before the database).
+// ok: {user:{id,username,guest}, session:{token,expires_in}, credential?}. A password login never matches a guest
+// (RJ 493: no email, no password), so its `guest` is false; a restore reports the account's.
 
 const { fail, sendOk } = require('../../contract/envelope');
 const { signSession, isSessionRefresh, nowSecFrom } = require('../../auth/tokens');
@@ -42,7 +44,7 @@ function registerSessionRoutes(router, deps) {
       const credential = await issueCredential(getDB(), {
         userId: user.user_id, platform: req.rjClient.platform, installId: req.rjClient.install,
       });
-      sendOk(res, { user: { id: user.user_id, username: user.username }, session: sessionFor(user), credential });
+      sendOk(res, { user: { id: user.user_id, username: user.username, guest: user.guest }, session: sessionFor(user), credential });
       return;
     }
 
@@ -64,7 +66,7 @@ function registerSessionRoutes(router, deps) {
 
       const user = await findUserByCredential(getDB(), { userId, token });
       if (!user) fail('AUTH_INVALID');
-      sendOk(res, { user: { id: user.user_id, username: user.username }, session: sessionFor(user) });
+      sendOk(res, { user: { id: user.user_id, username: user.username, guest: user.guest }, session: sessionFor(user) });
       return;
     }
 

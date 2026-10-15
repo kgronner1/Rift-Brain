@@ -100,7 +100,8 @@ test('POST /v1/accounts makes the account, its four rows and a hashed credential
   assert.equal(r.body.result, 'ok');
   const d = r.body.data;
   assert.deepEqual(Object.keys(d).sort(), ['credential', 'session', 'user']);
-  assert.deepEqual(Object.keys(d.user).sort(), ['id', 'username']);
+  assert.deepEqual(Object.keys(d.user).sort(), ['guest', 'id', 'username']);
+  assert.equal(d.user.guest, false, 'RJ 493');
   assert.equal(d.user.username, 'Pilot_One');
   assert.equal(d.session.expires_in, 3600);
   assert.equal(d.credential.user_id, d.user.id);
@@ -136,7 +137,7 @@ test('password login by username or email issues a new credential; a wrong passw
   const byName = await call('POST', '/v1/session', { body: { login: { id: 'Pilot_One', password: PASSWORD } } });
   assert.equal(code(byName), 'ok');
   assert.deepEqual(Object.keys(byName.body.data).sort(), ['credential', 'session', 'user']);
-  assert.deepEqual(byName.body.data.user, { id: ctx.one.id, username: 'Pilot_One' });
+  assert.deepEqual(byName.body.data.user, { id: ctx.one.id, username: 'Pilot_One', guest: false });
   const byEmail = await call('POST', '/v1/session', { headers: { ...HEADERS, 'X-RJ-Platform': 'ios', 'X-RJ-Install': 'install-0002' }, body: { login: { id: 'one@example.com', password: PASSWORD } } });
   assert.equal(code(byEmail), 'ok');
   assert.notEqual(byEmail.body.data.credential.token, byName.body.data.credential.token);
@@ -152,7 +153,7 @@ test('credential restore issues a session (no credential), touches last_used_at;
   const r = await call('POST', '/v1/session', { body: { credential: ctx.one.credential, session: ctx.one.session } });
   assert.equal(code(r), 'ok');
   assert.deepEqual(Object.keys(r.body.data).sort(), ['session', 'user']);
-  assert.deepEqual(r.body.data.user, { id: ctx.one.id, username: 'Pilot_One' });
+  assert.deepEqual(r.body.data.user, { id: ctx.one.id, username: 'Pilot_One', guest: false });
   const [c] = await q('SELECT last_used_at FROM user_credentials WHERE token_hash = ?', [sha256(ctx.one.credential.token)]);
   assert.ok(c.last_used_at !== null);
 

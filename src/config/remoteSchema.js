@@ -18,7 +18,8 @@ const NOTICE_LEVELS = ['info', 'warning', 'critical'];
 const ACTION_KINDS = ['dismiss', 'retry', 'open_url', 'open_store', 'login'];
 // feedback (RJ 488): the client hides its Feedback buttons when false. The brain never reads it, so a stale config
 // cannot make /v1/feedback refuse an entry the client then deletes.
-const FLAG_NAMES = ['multiplayer', 'quickplay', 'private_lobbies', 'account_creation', 'feedback'];
+// guest_play (RJ 493): clients make a silent guest account when true; when false the brain refuses new guests too.
+const FLAG_NAMES = ['multiplayer', 'quickplay', 'private_lobbies', 'account_creation', 'feedback', 'guest_play'];
 // server.rate_limits: every key is per minute unless its name says otherwise; [lo, hi] for each.
 const RATE_LIMITS = Object.freeze({
   login_per_min_ip: [1, 100000],
@@ -26,7 +27,10 @@ const RATE_LIMITS = Object.freeze({
   restore_per_min_credential: [1, 100000],
   feedback_per_min_ip: [1, 100000],
   feedback_per_day_ip: [1, 1000000],
+  guest_per_day_ip: [1, 1000000],
 });
+// server.guest_cull_days (RJ 493): a guest idle this long is deleted.
+const GUEST_CULL_DAYS = [1, 365];
 const MESSAGE_MAX = 280;
 const DOCUMENT_MAX_BYTES = 64 * 1024;
 // A config document is public. Every key is a known field already (no "session_key" can get in), so what is left
@@ -282,7 +286,7 @@ function validateDocument(doc, { env, domain = DOMAIN } = {}) {
 
   if ('server' in doc && c.object('server', doc.server)) {
     const s = doc.server;
-    c.keys('server', s, ['admission', 'lobby_queue_max', 'rate_limits', 'feedback_sheet_per_day']);
+    c.keys('server', s, ['admission', 'lobby_queue_max', 'rate_limits', 'feedback_sheet_per_day', 'guest_cull_days']);
     if ('admission' in s && c.object('server.admission', s.admission)) {
       const a = s.admission;
       c.keys('server.admission', a, ['enabled', 'rate_per_min', 'burst', 'grant_ttl_sec', 'ticket_ttl_sec',
@@ -304,6 +308,7 @@ function validateDocument(doc, { env, domain = DOMAIN } = {}) {
     }
     // RJ 489: the most feedback rows the forwarder sends to the sheet per UTC day; 0 sends none (rows wait).
     if ('feedback_sheet_per_day' in s) c.int('server.feedback_sheet_per_day', s.feedback_sheet_per_day, 0, 100000);
+    if ('guest_cull_days' in s) c.int('server.guest_cull_days', s.guest_cull_days, ...GUEST_CULL_DAYS);
   }
 
   checkSecrets(c, '', doc);
@@ -392,6 +397,7 @@ module.exports = {
   SCHEMA,
   CLAMPS,
   FLAG_NAMES,
+  GUEST_CULL_DAYS,
   RATE_LIMITS,
   validateDocument,
   newLocks,

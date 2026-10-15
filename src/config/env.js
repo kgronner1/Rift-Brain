@@ -166,6 +166,9 @@ function loadEnv(raw = process.env) {
 
   const mysql = readMysql(raw, problems);
   const feedbackSheet = readFeedbackSheet(raw);
+  // RJ 493: when the guest cull first runs after boot, and how often after that. A local stack sets them short.
+  const guestCullFirstSec = readSeconds(raw, 'GUEST_CULL_FIRST_SEC', 300, 0, problems);
+  const guestCullEverySec = readSeconds(raw, 'GUEST_CULL_EVERY_SEC', 3600, 1, problems);
 
   if (problems.length) throw new EnvError(problems);
 
@@ -190,7 +193,21 @@ function loadEnv(raw = process.env) {
     FEEDBACK_SHEET: feedbackSheet.sheet,
     // Why a half-set or malformed pair was ignored; app.js logs each at boot.
     FEEDBACK_SHEET_WARNINGS: Object.freeze(feedbackSheet.warnings),
+    GUEST_CULL_FIRST_SEC: guestCullFirstSec,
+    GUEST_CULL_EVERY_SEC: guestCullEverySec,
   });
+}
+
+// An optional whole number of seconds in lo..86400, or its default.
+function readSeconds(raw, name, def, lo, problems) {
+  if (isBlank(raw[name])) return def;
+  const s = String(raw[name]).trim();
+  const n = /^\d+$/.test(s) ? Number(s) : NaN;
+  if (!Number.isInteger(n) || n < lo || n > 86400) {
+    problems.push(`${name} must be a whole number of seconds in ${lo}..86400, got "${raw[name]}"`);
+    return def;
+  }
+  return n;
 }
 
 // FEEDBACK_SHEET_URL and FEEDBACK_SHEET_SECRET (RJ 489, ops/feedback/README.md): both optional, and both or neither.

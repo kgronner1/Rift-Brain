@@ -737,9 +737,19 @@ function createMatchRegistry({
     return locked(async () => releasePlayer(uid));
   }
 
+  // Whether user <uid> holds a seat (reserved or taken) or a ticket: the guest cull (RJ 493) passes such a player by.
+  function holds(uid) {
+    for (const lobby of lobbies.values()) {
+      for (const s of lobby.seats.values()) if (s.uid === uid) return true;
+    }
+    for (const t of tickets.values()) if (t.uid === uid) return true;
+    return false;
+  }
+
   return {
     join, poll, leave, heartbeat, playerJoined, playerLeft, verifiedSeat, sweep, drain,
     releasePlayer: dropPlayer,
+    holds,
     inGrace,
     start() {
       bootedAt = now();

@@ -285,6 +285,29 @@ test('RJ 473: releasePlayer drops a deleted account\'s reservations and tickets,
   assert.equal(reg.verifiedSeat(lobby.id, seated.uid), true);
 });
 
+test('RJ 493: holds(uid) is true for a reserved or taken seat and for a ticket, false otherwise', async () => {
+  const { reg, host } = makeRegistry();
+  const seated = player();
+  const q = await reg.join(seated);
+  assert.equal(reg.holds(seated.uid), true, 'a ticket for a booting lobby');
+  const lobby = onlyLobby(reg);
+  await reg.heartbeat(lobby.id, beat(lobby, 'PREGAME', { bots: 2 }));
+  reg.poll(q.queued.ticket, seated.install);
+  const seat = [...lobby.seats.keys()][0];
+  reg.playerJoined(lobby.id, { user_id: seated.uid, seat });
+  const reserved = player();
+  await reg.join(reserved);
+  host.busy = new Set(ENV.GAME_PORTS);
+  const waiting = player();
+  assert.equal((await reg.join(waiting)).result, 'queued');
+  assert.deepEqual([seated, reserved, waiting].map((p) => reg.holds(p.uid)), [true, true, true]);
+  assert.equal(reg.holds(player().uid), false);
+  await reg.releasePlayer(waiting.uid);
+  assert.equal(reg.holds(waiting.uid), false);
+  await reg.playerLeft(lobby.id, { user_id: seated.uid, seat });
+  assert.equal(reg.holds(seated.uid), false, 'a seat given up is not held');
+});
+
 test('a restarted brain spawns nothing for 30 s, adopts lobbies that heartbeat, then stops its strays', async () => {
   const clock = { t: Date.UTC(2026, 9, 8, 13, 0, 0) };
   const host = fakeHost();
