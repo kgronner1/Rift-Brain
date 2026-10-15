@@ -223,3 +223,34 @@ test('RJ 493: 0004 also applies over a baselined copy of today\'s database (dev\
   assert.equal((await usersColumn(conn, 'email')).cs, 'utf8mb4', 'the copy\'s own character set, not the table default\'s guess');
   assert.deepEqual((await conn.query('SELECT username, email, is_guest FROM users'))[0], [{ username: 'kept', email: 'k@x.io', is_guest: 0 }]);
 });
+
+async function statsDefault(conn, name) {
+  const [[c]] = await conn.query(
+    `SELECT COLUMN_DEFAULT AS def FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_stats' AND COLUMN_NAME = ?`, [name]);
+  return c.def === null ? null : String(c.def);
+}
+
+test('RJ 495: 0005 backfills the NULL stats and defaults both columns to 0, and reruns cleanly', { skip }, async (t) => {
+  const conn = await freshDatabase(t);
+  const dir = realMigrations(t, 4);
+  await migrate(conn, { dir, log: quiet });
+  for (let i = 1; i <= 3; i++) await conn.query('INSERT INTO users (username, email, password) VALUES (?, ?, ?)', [`u${i}`, `u${i}@x.io`, 'h']);
+  await conn.query('INSERT INTO user_stats (user_id) VALUES (1)');
+  await conn.query('INSERT INTO user_stats (user_id, num_jumps_alltime, mp_num_items_stolen_alltime) VALUES (2, 77, 5)');
+  const [[before]] = await conn.query('SELECT num_jumps_alltime AS j, mp_num_items_stolen_alltime AS s FROM user_stats WHERE user_id = 1');
+  assert.deepEqual([before.j, before.s], [null, null], 'the measurement: 0001 leaves a new row NULL here');
+
+  fs.copyFileSync(path.join(MIGRATIONS_DIR, '0005_stats_defaults.sql'), path.join(dir, '0005_stats_defaults.sql'));
+  assert.deepEqual((await migrate(conn, { dir, log: quiet })).applied, ['0005_stats_defaults.sql']);
+
+  const [rows] = await conn.query('SELECT user_id, num_jumps_alltime AS j, mp_num_items_stolen_alltime AS s FROM user_stats ORDER BY user_id');
+  assert.deepEqual(rows.map((r) => [r.user_id, r.j, r.s]), [[1, 0, 0], [2, 77, 5]], 'NULLs become 0; values are kept');
+  await conn.query('INSERT INTO user_stats (user_id) VALUES (3)');
+  const [[fresh]] = await conn.query('SELECT num_jumps_alltime AS j, mp_num_items_stolen_alltime AS s FROM user_stats WHERE user_id = 3');
+  assert.deepEqual([fresh.j, fresh.s], [0, 0], 'a new row starts at 0');
+  assert.deepEqual([await statsDefault(conn, 'num_jumps_alltime'), await statsDefault(conn, 'mp_num_items_stolen_alltime')], ['0', '0']);
+
+  await conn.query(fs.readFileSync(path.join(dir, '0005_stats_defaults.sql'), 'utf8'));
+  assert.equal(Number((await conn.query('SELECT COUNT(*) AS n FROM user_stats'))[0][0].n), 3, 'a rerun changes nothing');
+});
