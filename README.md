@@ -148,8 +148,8 @@ any change to it needs Alex and Kyler.
 - **Tokens** (`src/auth/tokens.js`): `base64url(payload).base64url(HMAC-SHA256(key bytes, payload part))`, no
   padding, times in seconds. `SESSION_KEY` signs sessions; a dev token is invalid in alpha.
 - **Rate limits** (`server.rate_limits` in config, per minute, in memory): password logins per IP and per account,
-  account creation per IP and per username/email, credential restores per credential. Over a limit: `RATE_LIMITED`
-  with `retry: after` and `Retry-After`.
+  account creation per IP and per username/email, credential restores per credential, account deletes per account
+  (RJ 473). Over a limit: `RATE_LIMITED` with `retry: after` and `Retry-After`.
 - **Logs** go through `src/log.js`, which redacts any value under a key naming a password, token, credential,
   authorization, grant or session, and anything shaped like one of our tokens. Request bodies are never logged.
 - **`fixtures/join_token_v1.txt`** is the client's cross-language test (Wobble Planet copies it to
@@ -399,3 +399,33 @@ forwarder copies it to the Player Feedback sheet through an Apps Script web app.
 - **Limits:** `server.rate_limits.feedback_per_min_ip` and `feedback_per_day_ip`. The brain never reads `flags.feedback`.
 - **Account deletion** (RJ 473) calls `storage.anonymizeFeedbackForUser(userId)`: the feedback stays, nothing names the
   player, and the sheet's Player cell becomes `deleted account`.
+
+## Account deletion (RJ 473)
+
+`DELETE /v1/me` 🔒 `{password}` deletes the signed-in player's account for good (App Store guideline 5.1.1(v)). The
+contract is Wobble Planet `docs/backend-api.md`, "Account deletion (RJ 473)".
+
+- **Refusals, in order:** the session (`AUTH_REQUIRED` / `AUTH_EXPIRED`); `VALIDATION` "Enter your password." (missing,
+  not a string, over 1024); `RATE_LIMITED` (`server.rate_limits.login_per_min_account`, per account, in a bucket apart
+  from logins); `AUTH_INVALID` when the account is already gone, or with "That password isn't right.". It is not a
+  multiplayer route (the multiplayer floor and maintenance never block it) and has no admission. ok: `{}`.
+- **One transaction** (`deleteUser(uid, {db})`, `src/storage/users.js`; it runs outside a request too) deletes the
+  user's rows in `user_credentials` (every device), `user_player_card`, `user_accolades_time_earned`, `user_accolades`,
+  `user_stats` (the leaderboard entries with it) and `users`, and anonymises the account's feedback, which is kept
+  (`anonymizeFeedbackForUser`; the sheet's Player cell follows). Then the match registry drops the uid's reserved seats
+  and waiting tickets; a player seated in a running match plays on. The username and email are free again.
+- **The log** gets one line, `[account] user <id> deleted`: never the name, the email or the password.
+- **Nothing brings it back.** A session is stateless and lives up to an hour after the delete:
+  `/v1/me/sp-stats/sync`, `/v1/me/accolades/sync` and `PUT /v1/me/player-card` check the account first and answer
+  `AUTH_INVALID`, writing nothing, as `/v1/match/join` does. The internal API ignores a deleted uid: `/match/results`
+  lists it in `ignored_user_ids`; `/match/accolades` answers ok with `user_accolades: {}` and every key in
+  `ignored_keys`. Every credential restore is `AUTH_INVALID` (scope `account`), so the other devices sign out.
+  `GET /v1/users/<id>/...` answers as for an id that never existed, and the leaderboards drop it. Feedback sent with
+  the old session is stored as anonymous.
+- **To see that it happened:** `SELECT COUNT(*) FROM users WHERE user_id = <id>` is 0, and the account's feedback rows
+  have `user_id` NULL and `anonymized_at` set (`sheet_state` `anon_pending` for a row the sheet already held).
+
+**Tests.** `test/account_delete_http.test.js` (the route's checks in order and the /me refusals, no database) and
+`test/account_delete.db.test.js` (the delete and each path above, against a database built from `migrations/`, with
+`RJ_TEST_DB`); `test/internal_http.test.js` and `test/match_registry.test.js` hold the internal API's and the
+registry's side.

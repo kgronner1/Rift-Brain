@@ -731,8 +731,15 @@ function createMatchRegistry({
     return locked(sweepLocked);
   }
 
+  // A deleted account (RJ 473, DELETE /v1/me): its reserved seats and waiting tickets go. A seat it has taken stays;
+  // the match plays on, and the brain ignores its results for the gone account.
+  function dropPlayer(uid) {
+    return locked(async () => releasePlayer(uid));
+  }
+
   return {
     join, poll, leave, heartbeat, playerJoined, playerLeft, verifiedSeat, sweep, drain,
+    releasePlayer: dropPlayer,
     inGrace,
     start() {
       bootedAt = now();

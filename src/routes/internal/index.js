@@ -8,6 +8,8 @@
 //   POST /internal/v1/lobby/player-left    {user_id, seat}
 //   POST /internal/v1/match/results        [{user_id, stats}, ...]   only users who took a seat in this lobby
 //   POST /internal/v1/match/accolades      {user_id, accolades}       likewise
+//     An account deleted meanwhile (RJ 473) is ignored by both: results list it in ignored_user_ids; accolades answer
+//     ok with user_accolades {} and every key in ignored_keys. Nothing is written for it.
 //   GET  /internal/v1/users/:id/accolades
 //   GET  /internal/v1/users/:id/player-card
 // Every response is spec 4.2's envelope. A bad or missing lobby key is AUTH_REQUIRED (401). The lobby key is never
@@ -75,7 +77,13 @@ function createInternalRouter({ env, match, config = () => ({ messages: {} }), s
         ignored.push(Number.isInteger(uid) ? uid : null);
       }
     }
-    const players = accepted.length ? await store.postMatchPlayerStatsUpdate(accepted) : [];
+    let live = accepted;
+    if (accepted.length) {
+      const existing = new Set(await store.existingUserIds(accepted.map((e) => e.user_id)));
+      live = accepted.filter((e) => existing.has(e.user_id));
+      for (const e of accepted) if (!existing.has(e.user_id)) ignored.push(e.user_id);
+    }
+    const players = live.length ? await store.postMatchPlayerStatsUpdate(live) : [];
     sendOk(res, { players, ignored_user_ids: ignored });
   }));
 
@@ -83,6 +91,11 @@ function createInternalRouter({ env, match, config = () => ({ messages: {} }), s
     const b = body(req);
     if (!Number.isInteger(b.user_id) || b.user_id <= 0) fail('VALIDATION', { message: 'Send {user_id, accolades}.' });
     if (!match.verifiedSeat(req.lobbyId, b.user_id)) fail('VALIDATION', { message: 'That player has no seat in this lobby.', status: 403 });
+    if (!(await store.userExists(b.user_id))) {
+      const keys = isObject(b.accolades) ? Object.keys(b.accolades).filter((k) => k !== '_last_updated') : [];
+      sendOk(res, { user_accolades: {}, ignored_keys: keys });
+      return;
+    }
     const r = await store.playerAccoladesSync({ user_id: b.user_id, accolades: b.accolades });
     sendOk(res, { user_accolades: r.user_accolades, ignored_keys: r.ignored_keys });
   }));

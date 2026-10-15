@@ -1,10 +1,11 @@
-// The users table: account creation and the two logins.
+// The users table: account creation, the two logins and account deletion.
 const { getDB } = require('../db');
 const bcrypt = require('bcryptjs');  // Import bcrypt for password hashing
 const fs = require('fs').promises;
 const path = require('path');
 const log = require('../log');
 const { issueCredential } = require('../auth/credentials');
+const { anonymizeFeedbackForUser } = require('./feedback');
 
 async function createAccessToken() {
   // Generate a salt with a specified number of rounds (cost factor)
@@ -311,6 +312,61 @@ async function touchLastLogin(user_id) {
   }
 }
 
+// --- account deletion (RJ 473) -----------------------------------------------------------------------------------
+
+// Whether the account still exists. A session is stateless and outlives a deleted account by up to an hour, so the
+// routes that act for a session's user ask this first. One primary-key read.
+async function userExists(userId, db = getDB()) {
+  const [rows] = await db.execute('SELECT 1 AS present FROM users WHERE user_id = ? LIMIT 1', [userId]);
+  return rows.length > 0;
+}
+
+// Which of these user ids still have an account (the internal API's match results drop the rest).
+async function existingUserIds(userIds, db = getDB()) {
+  if (!userIds.length) return [];
+  const [rows] = await db.execute(
+    `SELECT user_id FROM users WHERE user_id IN (${userIds.map(() => '?').join(', ')})`,
+    userIds,
+  );
+  return rows.map((r) => Number(r.user_id));
+}
+
+// DELETE /v1/me's password check: 'ok', 'wrong', or 'gone' when the account no longer exists. The hash stays here.
+async function verifyUserPassword(userId, password) {
+  const [rows] = await getDB().execute('SELECT password FROM users WHERE user_id = ? LIMIT 1', [userId]);
+  if (!rows[0]) return 'gone';
+  const hash = typeof rows[0].password === 'string' ? rows[0].password : DUMMY_HASH;
+  return (await bcrypt.compare(password, hash)) ? 'ok' : 'wrong';
+}
+
+// The tables that hold a user's rows, in an order the foreign keys allow (user_stats' key does not cascade).
+const USER_TABLES = ['user_credentials', 'user_player_card', 'user_accolades_time_earned', 'user_accolades', 'user_stats'];
+
+// The hard delete, in one transaction: every per-user row and the users row (so every credential, and the
+// leaderboard entries with user_stats), and the user's feedback kept but anonymised. Returns false when there was
+// no such user. Usable outside a request (db: a pool); the caller logs and releases the user's match seats.
+async function deleteUser(userId, { db = getDB(), now = Date.now() } = {}) {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute('SELECT user_id FROM users WHERE user_id = ? FOR UPDATE', [userId]);
+    if (!rows.length) {
+      await connection.rollback();
+      return false;
+    }
+    for (const table of USER_TABLES) await connection.execute(`DELETE FROM ${table} WHERE user_id = ?`, [userId]);
+    await connection.execute('DELETE FROM users WHERE user_id = ?', [userId]);
+    await anonymizeFeedbackForUser(userId, { db: connection, now });
+    await connection.commit();
+    return true;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 module.exports = {
   createAccessToken,
   createUser,
@@ -321,4 +377,8 @@ module.exports = {
   createAccount,
   verifyLogin,
   touchLastLogin,
+  userExists,
+  existingUserIds,
+  verifyUserPassword,
+  deleteUser,
 };
