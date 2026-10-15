@@ -50,7 +50,7 @@ src/routes/internal/    the internal API, game server -> brain, on 127.0.0.1:INT
 src/match/ports.js      which game port is free
 src/match/process.js    spawning and killing game server processes
 src/storage/            today's storage.js, split by table
-src/routes/legacy/      today's routes, unchanged in path and shape; they go at cutover
+src/routes/legacy/      today's routes, unchanged in path and shape; served only by the legacy brain (RJ 494)
 src/migrate.js          schema migrations (see "Migrations")
 src/config/remoteSchema.js  the remote config document's rules (RJ 463)
 src/config/remote.js    the brain's copy of its remote config document, read every 30 s (RJ 465)
@@ -126,9 +126,11 @@ Commit it as it is: migrate records its checksum, and an edit after the first ru
 
 ## API v1 (RJ 465)
 
-A new environment (`ENV=dev|alpha|prod`) serves `/v1` on its public listener beside today's routes; the legacy
-brain (`ENV` unset) does not, and is otherwise unchanged. The contract is the alpha-readiness spec, section 4:
-any change to it needs Alex and Kyler.
+A new environment (`ENV=dev|alpha|prod`) serves `/v1` on its public listener, and of today's routes only the probes
+`GET /` and `/server_health_check`: today's storage routes (`/single_player_stats_sync`, `/user_all_stats`, ...) take
+a `user_id` without any auth, so they are no longer served outside the legacy brain (RJ 494) and answer 404 there.
+The legacy brain (`ENV` unset) serves no `/v1` and is otherwise unchanged. The contract is the alpha-readiness spec,
+section 4: any change to it needs Alex and Kyler.
 
 - **Every response is an envelope** (`src/contract/envelope.js`): `{result:"ok",data}`, `{result:"error",error}` or
   `{result:"queued",queued}`. A route raises `fail('VALIDATION', { message })`; `src/contract/codes.js` fills the
