@@ -40,10 +40,11 @@ async function issueCredential(conn, { userId, platform, installId }) {
   return { user_id: userId, token };
 }
 
-// The user behind a non-revoked credential, or null. Touches last_used_at.
+// The user behind a non-revoked credential ({user_id, username, guest}), or null. Touches last_used_at, which is
+// a guest's activity for the cull (RJ 493).
 async function findUserByCredential(db, { userId, token }) {
   const [rows] = await db.execute(
-    `SELECT c.id AS credential_id, u.user_id, u.username
+    `SELECT c.id AS credential_id, u.user_id, u.username, u.is_guest
      FROM user_credentials c JOIN users u ON u.user_id = c.user_id
      WHERE c.token_hash = ? AND c.user_id = ? AND c.revoked_at IS NULL
      LIMIT 1`,
@@ -51,7 +52,7 @@ async function findUserByCredential(db, { userId, token }) {
   );
   if (!rows[0]) return null;
   await db.execute('UPDATE user_credentials SET last_used_at = NOW() WHERE id = ?', [rows[0].credential_id]);
-  return { user_id: Number(rows[0].user_id), username: rows[0].username };
+  return { user_id: Number(rows[0].user_id), username: rows[0].username, guest: Number(rows[0].is_guest) === 1 };
 }
 
 module.exports = {

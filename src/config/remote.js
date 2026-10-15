@@ -11,7 +11,7 @@
 // Node 16 has no global fetch: the default fetcher is https.get.
 
 const https = require('https');
-const { floorFor, RATE_LIMITS } = require('./remoteSchema');
+const { floorFor, RATE_LIMITS, GUEST_CULL_DAYS } = require('./remoteSchema');
 
 const POLL_MS = 30 * 1000;
 const FETCH_TIMEOUT_MS = 5000;
@@ -30,15 +30,16 @@ function defaultView(env) {
       min_wire: 1,
       maintenance: { active: false, scope: 'multiplayer', title: '', message: '', ends_at: null },
     },
-    flags: { multiplayer: true, quickplay: true, private_lobbies: true, account_creation: true, feedback: true },
+    flags: { multiplayer: true, quickplay: true, private_lobbies: true, account_creation: true, feedback: true, guest_play: true },
     messages: {},
     server: {
       admission: { enabled: false, rate_per_min: 600, burst: 50, grant_ttl_sec: 120, ticket_ttl_sec: 600,
         session_refresh_grace_sec: 86400 },
       lobby_queue_max: 200,
       rate_limits: { login_per_min_ip: 10, login_per_min_account: 5, restore_per_min_credential: 30,
-        feedback_per_min_ip: 10, feedback_per_day_ip: 200 },
+        feedback_per_min_ip: 10, feedback_per_day_ip: 200, guest_per_day_ip: 20 },
       feedback_sheet_per_day: 1000,
+      guest_cull_days: 7,
     },
   };
 }
@@ -153,6 +154,7 @@ function mergeDocument(prev, doc) {
       }
     } else if ('rate_limits' in s) reject('server.rate_limits', 'must be an object');
     takeInt(s, 'feedback_sheet_per_day', view.server, 'feedback_sheet_per_day', 0, 100000, 'server.feedback_sheet_per_day');
+    takeInt(s, 'guest_cull_days', view.server, 'guest_cull_days', ...GUEST_CULL_DAYS, 'server.guest_cull_days');
   } else if ('server' in doc) reject('server', 'must be an object');
 
   return { view, rejected };

@@ -50,7 +50,7 @@ src/routes/internal/    the internal API, game server -> brain, on 127.0.0.1:INT
 src/match/ports.js      which game port is free
 src/match/process.js    spawning and killing game server processes
 src/storage/            today's storage.js, split by table
-src/routes/legacy/      today's routes, unchanged in path and shape; they go at cutover
+src/routes/legacy/      today's routes, unchanged in path and shape; served only by the legacy brain (RJ 494)
 src/migrate.js          schema migrations (see "Migrations")
 src/config/remoteSchema.js  the remote config document's rules (RJ 463)
 src/config/remote.js    the brain's copy of its remote config document, read every 30 s (RJ 465)
@@ -58,6 +58,7 @@ src/contract/           the /v1 envelope and the error code registry (RJ 465)
 src/middleware/         /v1's request id, client-header gates, session auth, rate limits, errors (RJ 465)
 src/auth/               tokens (sign/verify, the lobby key) and device credentials (RJ 465)
 src/routes/v1/          API v1 (RJ 465); /v1/match/join and /v1/queue's lobby kind (RJ 466); its admission kind (RJ 468)
+src/guests/cull.js      the hourly cull of idle guest accounts (RJ 493)
 src/admission/          the admission queue in front of sign-in (RJ 468, spec M6), in process memory
 src/feedback/           player feedback (RJ 488/489): the entry's cleaning, the sheet's row, the sheet forwarder
 ops/feedback/           the Player Feedback sheet's Apps Script and its runbook (RJ 489)
@@ -101,6 +102,8 @@ npm run migrate -- --status      # list applied and pending, change nothing
 |---|---|
 | `0001_baseline.sql` | today's `rift_brain` schema, dumped from the box (not yet in git, see below) |
 | `0002_hardening.sql` | `UNIQUE` on `users.username` and `users.email`; `user_credentials`; drops `users.access_token` |
+| `0003_feedback.sql` | the `feedback` table (RJ 488) |
+| `0004_guests.sql` | `users.is_guest`; `users.email` and `users.password` NULL-able; the cull's index (RJ 493) |
 
 **Making `0001_baseline.sql`** (once, by hand, on the box). Over SSH:
 
@@ -126,9 +129,11 @@ Commit it as it is: migrate records its checksum, and an edit after the first ru
 
 ## API v1 (RJ 465)
 
-A new environment (`ENV=dev|alpha|prod`) serves `/v1` on its public listener beside today's routes; the legacy
-brain (`ENV` unset) does not, and is otherwise unchanged. The contract is the alpha-readiness spec, section 4:
-any change to it needs Alex and Kyler.
+A new environment (`ENV=dev|alpha|prod`) serves `/v1` on its public listener, and of today's routes only the probes
+`GET /` and `/server_health_check`: today's storage routes (`/single_player_stats_sync`, `/user_all_stats`, ...) take
+a `user_id` without any auth, so they are no longer served outside the legacy brain (RJ 494) and answer 404 there.
+The legacy brain (`ENV` unset) serves no `/v1` and is otherwise unchanged. The contract is the alpha-readiness spec,
+section 4: any change to it needs Alex and Kyler.
 
 - **Every response is an envelope** (`src/contract/envelope.js`): `{result:"ok",data}`, `{result:"error",error}` or
   `{result:"queued",queued}`. A route raises `fail('VALIDATION', { message })`; `src/contract/codes.js` fills the
@@ -148,8 +153,8 @@ any change to it needs Alex and Kyler.
 - **Tokens** (`src/auth/tokens.js`): `base64url(payload).base64url(HMAC-SHA256(key bytes, payload part))`, no
   padding, times in seconds. `SESSION_KEY` signs sessions; a dev token is invalid in alpha.
 - **Rate limits** (`server.rate_limits` in config, per minute, in memory): password logins per IP and per account,
-  account creation per IP and per username/email, credential restores per credential. Over a limit: `RATE_LIMITED`
-  with `retry: after` and `Retry-After`.
+  account creation per IP and per username/email, credential restores per credential, account deletes per account
+  (RJ 473). Over a limit: `RATE_LIMITED` with `retry: after` and `Retry-After`.
 - **Logs** go through `src/log.js`, which redacts any value under a key naming a password, token, credential,
   authorization, grant or session, and anything shaped like one of our tokens. Request bodies are never logged.
 - **`fixtures/join_token_v1.txt`** is the client's cross-language test (Wobble Planet copies it to
@@ -399,3 +404,82 @@ forwarder copies it to the Player Feedback sheet through an Apps Script web app.
 - **Limits:** `server.rate_limits.feedback_per_min_ip` and `feedback_per_day_ip`. The brain never reads `flags.feedback`.
 - **Account deletion** (RJ 473) calls `storage.anonymizeFeedbackForUser(userId)`: the feedback stays, nothing names the
   player, and the sheet's Player cell becomes `deleted account`.
+
+## Account deletion (RJ 473)
+
+`DELETE /v1/me` 🔒 `{password}` deletes the signed-in player's account for good (App Store guideline 5.1.1(v)). The
+contract is Wobble Planet `docs/backend-accounts.md`, "Account deletion (RJ 473)".
+
+- **Refusals, in order:** the session (`AUTH_REQUIRED` / `AUTH_EXPIRED`); `RATE_LIMITED`
+  (`server.rate_limits.login_per_min_account`, per account, in a bucket apart from logins); `AUTH_INVALID` when the
+  account is already gone; then, for an account with a login, `VALIDATION` "Enter your password." (missing, not a
+  string, over 1024) and `AUTH_INVALID` "That password isn't right.". A guest (RJ 493) needs no password: one sent is
+  ignored. It is not a multiplayer route (the multiplayer floor and maintenance never block it) and has no admission.
+  ok: `{}`.
+- **One transaction** (`deleteUser(uid, {db})`, `src/storage/users.js`; it runs outside a request too) deletes the
+  user's rows in `user_credentials` (every device), `user_player_card`, `user_accolades_time_earned`, `user_accolades`,
+  `user_stats` (the leaderboard entries with it) and `users`, and anonymises the account's feedback, which is kept
+  (`anonymizeFeedbackForUser`; the sheet's Player cell follows). Then the match registry drops the uid's reserved seats
+  and waiting tickets; a player seated in a running match plays on. The username and email are free again.
+- **The log** gets one line, `[account] user <id> deleted`: never the name, the email or the password.
+- **Nothing brings it back.** A session is stateless and lives up to an hour after the delete:
+  `/v1/me/sp-stats/sync`, `/v1/me/accolades/sync` and `PUT /v1/me/player-card` check the account first and answer
+  `AUTH_INVALID`, writing nothing, as `/v1/match/join` does. The internal API ignores a deleted uid: `/match/results`
+  lists it in `ignored_user_ids`; `/match/accolades` answers ok with `user_accolades: {}` and every key in
+  `ignored_keys`. Every credential restore is `AUTH_INVALID` (scope `account`), so the other devices sign out.
+  `GET /v1/users/<id>/...` answers as for an id that never existed, and the leaderboards drop it. Feedback sent with
+  the old session is stored as anonymous.
+- **To see that it happened:** `SELECT COUNT(*) FROM users WHERE user_id = <id>` is 0, and the account's feedback rows
+  have `user_id` NULL and `anonymized_at` set (`sheet_state` `anon_pending` for a row the sheet already held).
+
+**Tests.** `test/account_delete_http.test.js` (the route's checks in order and the /me refusals, no database) and
+`test/account_delete.db.test.js` (the delete and each path above, against a database built from `migrations/`, with
+`RJ_TEST_DB`); `test/internal_http.test.js` and `test/match_registry.test.js` hold the internal API's and the
+registry's side.
+
+## Guest accounts (RJ 493)
+
+A player with no login plays online as a guest: a real account (`users` row, uid > 0, stats, accolades, a credential)
+with `is_guest = 1`, a generated name and no email or password (`migrations/0004_guests.sql`). Matchmaking, join
+tokens, the internal API and match results treat it like any account. The contract is Wobble Planet
+`docs/backend-accounts.md`, "Guest play (RJ 493)".
+
+- **Creation:** `POST /v1/accounts {guest: true}` (optional `grant`; `username`, `email` and `password` are ignored).
+  In order: `VALIDATION` "Guest play is off right now. Log in or create an account." when `flags.guest_play` is false
+  (the brain's own kill switch, read live from remote config); `RATE_LIMITED` by `accounts-ip`
+  (`login_per_min_ip`); admission as for any sign-in (`queued` / `grant`); `RATE_LIMITED` by
+  `server.rate_limits.guest_per_day_ip` (default 20, a fixed 24-hour window per IP in memory, counted only once
+  admission lets the request through). The name is `Pilot-NNNN` (four random digits; six after three collisions on
+  the UNIQUE key). ok: `{user: {id, username, guest: true}, session: {token, expires_in}, credential}`.
+- **`user.guest`** is in every `user` `/v1/session` and `/v1/accounts` return. A password login never matches a guest
+  (`AUTH_INVALID`, whatever is typed); a restore of a guest's credential answers `guest: true`.
+- **Reserved names:** a new real username (account creation and upgrade) matching `/^pilot-?\d+$/i` is `VALIDATION`
+  "That username is reserved.", checked after the bad words and before "already taken".
+- **Upgrade:** `POST /v1/me/upgrade` 🔒 `{username, email, password}` gives a guest a login on the same row: same id,
+  credentials, session and stats. Account creation's limits and rules (`checkNewUser`, its messages, the field
+  maxima, the reserved names); no admission. `AUTH_INVALID` when the account is gone; `VALIDATION` "This account
+  already has a login." for a non-guest. ok: `{user: {id, username, guest: false}}`.
+- **Leaderboards** leave guests out: not in `list`, not counted in anyone's `rank`, and `&user_id=<a guest>` answers
+  `user: null`. A guest's own `GET /v1/users/<id>/...` reads as any account's. An upgraded guest is on them at once.
+- **Delete:** `DELETE /v1/me` needs no password from a guest ("Account deletion" above).
+- **The cull** (`src/guests/cull.js`): every hour (the first run 5 minutes after boot), guests idle for
+  `server.guest_cull_days` (1..365, default 7; read live) are deleted through the account deletion, at most 500 a
+  sweep. Idle: `users.last_login`, `users.created_date` and every credential's `last_used_at` (a restore, and so every
+  hourly session refresh, touches it) all older than that, by the database's clock. A guest holding a seat or ticket in
+  the match registry is passed by, and the delete checks again under the row lock, so a guest who upgraded or came back
+  meanwhile stays. One line per sweep that culled anything: `[guests] culled <n> idle guest(s)`.
+  `GUEST_CULL_FIRST_SEC` (default 300) and `GUEST_CULL_EVERY_SEC` (default 3600) in `.env` move the timer; a local
+  stack testing the cull sets them to a few seconds, backdates a guest, and waits for the line:
+
+```
+UPDATE users SET last_login = NOW() - INTERVAL 8 DAY, created_date = NOW() - INTERVAL 8 DAY WHERE user_id = <id>;
+UPDATE user_credentials SET last_used_at = NOW() - INTERVAL 8 DAY WHERE user_id = <id>;
+```
+
+- **Remote config, schema 1, additive:** `flags.guest_play` (default true), `server.guest_cull_days`,
+  `server.rate_limits.guest_per_day_ip`; both sources in `config/` carry them.
+
+**Tests.** `test/guest_http.test.js` (creation's checks in order and the upgrade's refusals, no database),
+`test/guest_cull.test.js` (the sweep and its timers), `test/guest_config.test.js` (both config readers, the sources,
+the two `.env` settings), `test/guests.db.test.js` (everything above against a database built from `migrations/`), and
+`test/migrate.db.test.js` (0004 on a populated table, and over a baselined copy).

@@ -7,10 +7,15 @@ const assert = require('node:assert/strict');
 const { createInternalApp } = require('../src/app');
 const { LOBBY_MASTER_KEY, FP_A, ENV, makeRegistry, fakeHost, player, beat, lobbyKey, quietLogger } = require('./match_fixture');
 
+// deleted: user ids whose account is gone (RJ 473).
 function fakeStore() {
   const calls = [];
+  const deleted = new Set();
   return {
     calls,
+    deleted,
+    async existingUserIds(ids) { return ids.filter((id) => !deleted.has(id)); },
+    async userExists(id) { return !deleted.has(id); },
     async postMatchPlayerStatsUpdate(body) { calls.push(['results', body]); return body.map((p) => ({ user_id: p.user_id, numJumps: 1 })); },
     async playerAccoladesSync(body) { calls.push(['accolades', body]); return { user_accolades: { user_id: body.user_id }, ignored_keys: [] }; },
     async getUserAccolades(uid) { return { Rookie: { earnRate: 50, earned: uid } }; },
@@ -114,6 +119,34 @@ test('player-joined and player-left; results and accolades only for seated playe
   const other = 'c'.repeat(24);
   const cross = await s.call('POST', '/match/results', { lobby: other, body: results });
   assert.deepEqual(cross.body.data.ignored_user_ids, [a.uid, b.uid, 424242]);
+});
+
+test('RJ 473: a seated player whose account was deleted mid-match is ignored by results and accolades', async (t) => {
+  const s = await start(t);
+  const { lobby, players } = await seatedLobby(s, 2);
+  const [a, b] = players;
+  for (const p of [a, b]) {
+    const seat = [...lobby.seats].find(([, x]) => x.uid === p.uid)[0];
+    assert.equal((await s.call('POST', '/lobby/player-joined', { lobby: lobby.id, body: { user_id: p.uid, seat } })).status, 200);
+  }
+  s.store.deleted.add(b.uid);
+
+  const r = await s.call('POST', '/match/results', {
+    lobby: lobby.id, body: [{ user_id: a.uid, stats: { numJumps: 3 } }, { user_id: b.uid, stats: { numJumps: 4 } }],
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.data.ignored_user_ids, [b.uid]);
+  assert.deepEqual(s.store.calls, [['results', [{ user_id: a.uid, stats: { numJumps: 3 } }]]], 'the deleted player never reaches storage');
+
+  const acc = await s.call('POST', '/match/accolades', { lobby: lobby.id, body: { user_id: b.uid, accolades: { _last_updated: 5, Rookie: 1, Ghost: 2 } } });
+  assert.equal(acc.status, 200);
+  assert.deepEqual(acc.body.data, { user_accolades: {}, ignored_keys: ['Rookie', 'Ghost'] });
+  assert.equal(s.store.calls.length, 1, 'no accolade sync for the deleted player');
+
+  s.store.deleted.add(a.uid);
+  const none = await s.call('POST', '/match/results', { lobby: lobby.id, body: [{ user_id: a.uid, stats: {} }] });
+  assert.deepEqual([none.body.data.players, none.body.data.ignored_user_ids], [[], [a.uid]]);
+  assert.equal(s.store.calls.length, 1, 'nothing left to write: storage is not called');
 });
 
 test('reads: accolades (0 is the global earn rates) and the player card', async (t) => {
