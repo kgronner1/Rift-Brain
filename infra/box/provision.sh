@@ -657,10 +657,13 @@ step_verify() {
   done
   [ "$ok" = 1 ] || { pm2 logs "$APP" --lines 30 --nostream || true; die "the brain does not answer on 127.0.0.1:$PUBLIC_PORT"; }
   say "PASS the brain answers on 127.0.0.1:$PUBLIC_PORT"
-  if curl -fsS -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PUBLIC_PORT/user_stats_columns"; then
+  # The database through /v1: a leaderboard reads users and user_stats. Not the legacy POST /user_stats_columns, which
+  # only the legacy brain serves (RJ 494).
+  if curl -sS -H "X-RJ-Env: $ENV_NAME" -H 'X-RJ-Api: 1' \
+    "http://127.0.0.1:$PUBLIC_PORT/v1/leaderboards/mp_num_matches_won_alltime?limit=1" | grep -q '"result":"ok"'; then
     say "PASS it reads $DB_NAME"
   else
-    say "WARNING: POST /user_stats_columns failed; check pm2 logs $APP"
+    say "WARNING: GET /v1/leaderboards/mp_num_matches_won_alltime did not answer ok; check pm2 logs $APP"
   fi
   # /v1 (RJ 465): the envelope, behind the gates, with this environment's headers.
   if curl -sS -H "X-RJ-Env: $ENV_NAME" -H 'X-RJ-Api: 1' "http://127.0.0.1:$PUBLIC_PORT/v1/stats/columns" | grep -q '"result":"ok"'; then
