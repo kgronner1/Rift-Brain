@@ -5,6 +5,7 @@
 //   GET /v1/users/:id/player-card   -> {user_id, equipped_accolade_key}
 //   GET /v1/stats/columns           -> {columns, labels}
 //   GET /v1/leaderboards/:field     ?limit= (1..100, default 25) &user_id=  -> {list, user}
+//     Guests (RJ 493) are on no leaderboard: not in the list, not counted in a rank, and `user` is null for one.
 
 const { fail, sendOk } = require('../../contract/envelope');
 const { getDB } = require('../../db');
@@ -84,6 +85,7 @@ function registerUserRoutes(router) {
     const [rows] = await db.execute(
       `SELECT us.user_id, u.username, us.${col} AS score
        FROM user_stats us JOIN users u ON u.user_id = us.user_id
+       WHERE u.is_guest = 0
        ORDER BY us.${col} DESC, us.user_id ASC
        LIMIT ${limit}`,
     );
@@ -91,9 +93,10 @@ function registerUserRoutes(router) {
     if (userId !== null) {
       const [userRows] = await db.execute(
         `SELECT us.user_id, u.username, us.${col} AS score,
-                (SELECT COUNT(*) + 1 FROM user_stats us2 WHERE us2.${col} > us.${col}) AS \`rank\`
+                (SELECT COUNT(*) + 1 FROM user_stats us2 JOIN users u2 ON u2.user_id = us2.user_id
+                 WHERE u2.is_guest = 0 AND us2.${col} > us.${col}) AS \`rank\`
          FROM user_stats us JOIN users u ON u.user_id = us.user_id
-         WHERE us.user_id = ? LIMIT 1`,
+         WHERE us.user_id = ? AND u.is_guest = 0 LIMIT 1`,
         [userId],
       );
       user = userRows[0] || null;

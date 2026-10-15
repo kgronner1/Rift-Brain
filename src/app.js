@@ -21,6 +21,7 @@ const { createInternalRouter } = require('./routes/internal');
 const { registerStorageRoutes } = require('./routes/legacy/storage');
 const { createFeedbackForwarder } = require('./feedback/forwarder');
 const { createFeedbackSheetStore } = require('./storage/feedback');
+const { createGuestCull } = require('./guests/cull');
 
 // Ensure fatal errors have a dedicated log file outside stdout/stderr.
 const fatalLogDir = path.join(__dirname, '..', 'logs');
@@ -141,6 +142,8 @@ async function main() {
   admission.start();
   await listen(createPublicApp(null, { v1: { env, remote, match, admission } }), env.PUBLIC_PORT, env.BIND_HOST, 'public');
   startFeedbackForwarder(env, config);
+  // RJ 493: idle guests, first after GUEST_CULL_FIRST_SEC, then every GUEST_CULL_EVERY_SEC.
+  createGuestCull({ config, match, firstMs: env.GUEST_CULL_FIRST_SEC * 1000, everyMs: env.GUEST_CULL_EVERY_SEC * 1000 }).start();
 }
 
 // RJ 489: feedback rows go to the Player Feedback sheet only when the box's .env names it (ops/feedback/README.md);

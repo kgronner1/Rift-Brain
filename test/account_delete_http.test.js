@@ -1,7 +1,8 @@
 'use strict';
-// RJ 473 over HTTP without a database: DELETE /v1/me's checks in order (session, VALIDATION, RATE_LIMITED, the
-// password), its ok, the match registry release and the log line; and the /me writes refusing a session whose account
-// is gone. The account store and the registry are stand-ins; account_delete.db.test.js drives the real ones.
+// RJ 473 over HTTP without a database: DELETE /v1/me's checks in order (session, RATE_LIMITED, the account, then for
+// an account with a login VALIDATION and the password; RJ 493: a guest needs none), its ok, the match registry release
+// and the log line; and the /me writes refusing a session whose account is gone. The account store and the registry
+// are stand-ins; account_delete.db.test.js drives the real ones.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createPublicApp } = require('../src/app');
@@ -18,14 +19,18 @@ const GOOD = {
   'X-RJ-Platform': 'android', 'X-RJ-Install': '6f1c2b8e-0000-4000-8000-000000000001',
 };
 
-// users: uid -> password. Deleting removes the entry.
-function fakeAccounts(users = { 7: PASSWORD, 8: PASSWORD }) {
+// users: uid -> password (null: a guest, RJ 493). Deleting removes the entry.
+function fakeAccounts(users = { 7: PASSWORD, 8: PASSWORD, 10: null }) {
   const calls = [];
   const live = new Map(Object.entries(users).map(([k, v]) => [Number(k), v]));
   return {
     calls,
     live,
     async userExists(uid) { calls.push(['exists', uid]); return live.has(uid); },
+    async findAccount(uid) {
+      calls.push(['find', uid]);
+      return live.has(uid) ? { user_id: uid, username: `u${uid}`, guest: live.get(uid) === null } : null;
+    },
     async verifyUserPassword(uid, password) {
       calls.push(['verify', uid]);
       if (!live.has(uid)) return 'gone';
@@ -77,8 +82,10 @@ function code(r) {
   return r.body.result === 'error' ? r.body.error.code : r.body.result;
 }
 
-test('DELETE /v1/me needs a session; then VALIDATION for a missing, non-string or over-long password, before the store', async (t) => {
-  const { call, accounts } = await startApp(t);
+test('DELETE /v1/me needs a session; an account with a login then needs its password (VALIDATION) before it is checked', async (t) => {
+  const v = view();
+  v.server.rate_limits = { ...v.server.rate_limits, login_per_min_account: 100 };
+  const { call, accounts } = await startApp(t, { v });
   assert.equal(code(await call('DELETE', '/v1/me', { uid: 0, body: { password: PASSWORD } })), 'AUTH_REQUIRED');
   const old = signSession({ uid: 7, env: 'dev', nowSec: NOW_SEC - 3600, keyHex: KEY }).token;
   assert.equal(code(await call('DELETE', '/v1/me', { token: old, body: { password: PASSWORD } })), 'AUTH_EXPIRED');
@@ -86,7 +93,7 @@ test('DELETE /v1/me needs a session; then VALIDATION for a missing, non-string o
     const r = await call('DELETE', '/v1/me', { body });
     assert.deepEqual([code(r), r.status, r.body.error.message], ['VALIDATION', 400, 'Enter your password.'], JSON.stringify(body));
   }
-  assert.deepEqual(accounts.calls, [], 'the store was never asked');
+  assert.ok(accounts.calls.every(([op]) => op === 'find'), 'the password was never checked, nothing deleted');
   assert.equal(code(await call('DELETE', '/v1/me', { body: { password: 'p'.repeat(1024) } })), 'AUTH_INVALID', '1024 is allowed');
 });
 
@@ -95,7 +102,7 @@ test('a wrong password is AUTH_INVALID with its own message and deletes nothing;
   const wrong = await call('DELETE', '/v1/me', { body: { password: 'not it' } });
   assert.equal(code(wrong), 'AUTH_INVALID');
   assert.deepEqual([wrong.status, wrong.body.error.message, wrong.body.error.scope], [401, "That password isn't right.", 'account']);
-  assert.deepEqual(accounts.calls, [['verify', 7]]);
+  assert.deepEqual(accounts.calls, [['find', 7], ['verify', 7]]);
   assert.equal(accounts.live.has(7), true);
   assert.deepEqual(match.released, []);
 
@@ -110,7 +117,7 @@ test('ok: {} once the account is deleted and its match seats released; one log l
   const r = await call('DELETE', '/v1/me', { body: { password: PASSWORD } });
   assert.equal(r.status, 200);
   assert.deepEqual(r.body, { result: 'ok', data: {} });
-  assert.deepEqual(accounts.calls, [['verify', 7], ['delete', 7]]);
+  assert.deepEqual(accounts.calls, [['find', 7], ['verify', 7], ['delete', 7]]);
   assert.deepEqual(match.released, [7]);
   assert.deepEqual(lines.filter((l) => l.startsWith('[account]')), ['[account] user 7 deleted']);
   assert.ok(lines.some((l) => /^\[v1\] r-[0-9a-f]+ DELETE \/v1\/me 200/.test(l)), 'the request line was captured (the measurement works)');
@@ -173,4 +180,17 @@ test('the /me writes answer AUTH_INVALID for a session whose account is gone, be
   // With the account there, the same calls get past the check into storage (INTERNAL: no database here).
   for (const [method, path, body] of writes) assert.equal(code(await call(method, path, { body })), 'INTERNAL', path);
   assert.deepEqual(accounts.calls.map(([op, uid]) => `${op} ${uid}`), ['exists 9', 'exists 9', 'exists 9', 'exists 7', 'exists 7', 'exists 7']);
+});
+
+test('RJ 493: a guest deletes with no password; one sent is ignored, never checked', async (t) => {
+  for (const body of [undefined, {}, { password: 'anything' }, { password: 5 }]) {
+    const { call, accounts, match, lines } = await startApp(t);
+    const r = await call('DELETE', '/v1/me', { uid: 10, body });
+    assert.deepEqual(r.body, { result: 'ok', data: {} }, JSON.stringify(body));
+    assert.deepEqual(accounts.calls, [['find', 10], ['delete', 10]]);
+    assert.deepEqual(match.released, [10]);
+    assert.deepEqual(lines.filter((l) => l.startsWith('[account]')), ['[account] user 10 deleted']);
+  }
+  const { call } = await startApp(t);
+  assert.equal(code(await call('DELETE', '/v1/me', { body: {} })), 'VALIDATION', 'an account with a login still needs it');
 });
