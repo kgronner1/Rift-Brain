@@ -408,7 +408,7 @@ forwarder copies it to the Player Feedback sheet through an Apps Script web app.
 ## Account deletion (RJ 473)
 
 `DELETE /v1/me` 🔒 `{password}` deletes the signed-in player's account for good (App Store guideline 5.1.1(v)). The
-contract is Wobble Planet `docs/backend-api.md`, "Account deletion (RJ 473)".
+contract is Wobble Planet `docs/backend-accounts.md`, "Account deletion (RJ 473)".
 
 - **Refusals, in order:** the session (`AUTH_REQUIRED` / `AUTH_EXPIRED`); `RATE_LIMITED`
   (`server.rate_limits.login_per_min_account`, per account, in a bucket apart from logins); `AUTH_INVALID` when the
@@ -442,7 +442,7 @@ registry's side.
 A player with no login plays online as a guest: a real account (`users` row, uid > 0, stats, accolades, a credential)
 with `is_guest = 1`, a generated name and no email or password (`migrations/0004_guests.sql`). Matchmaking, join
 tokens, the internal API and match results treat it like any account. The contract is Wobble Planet
-`docs/backend-api.md`, "Guest play (RJ 493)".
+`docs/backend-accounts.md`, "Guest play (RJ 493)".
 
 - **Creation:** `POST /v1/accounts {guest: true}` (optional `grant`; `username`, `email` and `password` are ignored).
   In order: `VALIDATION` "Guest play is off right now. Log in or create an account." when `flags.guest_play` is false
