@@ -151,12 +151,14 @@ section 4: any change to it needs Alex and Kyler.
   first fetch, the compiled defaults (open gates, spec 4.5's limits).
 - **Sign-in.** `POST /v1/accounts` and a password login at `POST /v1/session` issue a device credential (32 random
   bytes; the database keeps only its SHA-256 in `user_credentials`) and a one-hour session token. A credential restore
-  at `/v1/session` issues a session. Revoke a device with `UPDATE user_credentials SET revoked_at = NOW() WHERE id = ?`.
+  at `/v1/session` issues a session. Logging out revokes one: see "Logging out (RJ 506)" below. To revoke a device by
+  hand, `UPDATE user_credentials SET revoked_at = NOW() WHERE id = ?`.
 - **Tokens** (`src/auth/tokens.js`): `base64url(payload).base64url(HMAC-SHA256(key bytes, payload part))`, no
   padding, times in seconds. `SESSION_KEY` signs sessions; a dev token is invalid in alpha.
 - **Rate limits** (`server.rate_limits` in config, per minute, in memory): password logins per IP and per account,
-  account creation per IP and per username/email, credential restores per credential, account deletes per account
-  (RJ 473). Over a limit: `RATE_LIMITED` with `retry: after` and `Retry-After`.
+  account creation per IP and per username/email, credential restores per credential, credential revokes per credential
+  (RJ 506, the restore's limit in a bucket of its own), account deletes per account (RJ 473). Over a limit:
+  `RATE_LIMITED` with `retry: after` and `Retry-After`.
 - **Logs** go through `src/log.js`, which redacts any value under a key naming a password, token, credential,
   authorization, grant or session, and anything shaped like one of our tokens. Request bodies are never logged.
 - **`fixtures/join_token_v1.txt`** is the client's cross-language test (Wobble Planet copies it to
@@ -178,6 +180,37 @@ so runtime code uses no global `fetch` until cutover (the config fetcher is `htt
 On Node 20.12.2 (the box's), `test/v1_http.test.js`'s gate test fails in its own `fetch` client (that undici
 retries a 421 and then reports `UND_ERR_REQ_CONTENT_LENGTH_MISMATCH`); the brain answers it correctly, and 20.20 passes.
 
+
+### Logging out (RJ 506)
+
+`POST /v1/session/revoke {credential: {user_id, token}}` revokes that credential: its `user_credentials.revoked_at` is
+set, and every later restore or refresh with it is `AUTH_INVALID` (scope `account`). Without it, LOG OUT only forgot the
+credential on the device, so a copy of the save kept signing in until the account was deleted. It is additive to spec
+section 4.10, which said a credential is revocable but had no route for it. Alex approved it; Kyler approves it in
+review. The choices made where the spec was silent, also in `src/routes/v1/session.js`:
+
+- **The credential is the proof, not a session.** It takes the restore's shape, so a device whose one-hour session has
+  lapsed can still log out. A bearer, if one is sent, is ignored.
+- **It says nothing about the credential.** The answer is `ok {}` for a credential that was live, already revoked,
+  unknown, or names another user. A second revoke keeps the first one's `revoked_at`.
+- **Its refusals:** `VALIDATION` "That sign-in couldn't be read. Please sign in again." for an unreadable credential (as
+  the restore). `RATE_LIMITED` per credential hash at `server.rate_limits.restore_per_min_credential`, in a bucket of
+  its own (`revoke-credential`). No new code and no new config field.
+- **No admission, and not a multiplayer route.** The app gates (env, api, `min_build`, app maintenance) apply; the
+  multiplayer ones don't.
+- **Only that device is signed out.** The account's other credentials stay live. A session already issued is stateless
+  and lives out its hour.
+- **The name.** It sits beside the restore it undoes. `DELETE /v1/session` would name the session, which is stateless,
+  and `/v1/me/...` routes take a session.
+- **The log** gets `[session] user <id> revoked a credential` when a row changed, and nothing otherwise. The token is
+  never logged.
+
+The client (Wobble Planet `Net.session.logout()`) sends it once, without a bearer, and forgets the credential whatever
+the answer, so logging out offline still works. Wobble Planet `docs/backend-accounts.md`, "Logging out (RJ 506)".
+
+**Tests.** `test/session_revoke_http.test.js` covers the checks in order, the one answer, no session, no admission and
+the gates, with no database. `test/v1.db.test.js` covers the real revoke against `migrations/`: the restore and the
+refresh are refused after it, the other devices are untouched, and the log line is written.
 
 ## Matchmaking (RJ 466, spec M4)
 

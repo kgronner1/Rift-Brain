@@ -55,6 +55,16 @@ async function findUserByCredential(db, { userId, token }) {
   return { user_id: Number(rows[0].user_id), username: rows[0].username, guest: Number(rows[0].is_guest) === 1 };
 }
 
+// Logging out (RJ 506): sets revoked_at on the credential whose token and user both match, if it is still live.
+// Returns whether a row changed; the route answers the same either way.
+async function revokeCredential(db, { userId, token }) {
+  const [r] = await db.execute(
+    'UPDATE user_credentials SET revoked_at = NOW() WHERE token_hash = ? AND user_id = ? AND revoked_at IS NULL',
+    [hashCredentialToken(token), userId],
+  );
+  return Number(r.affectedRows) === 1;
+}
+
 module.exports = {
   newCredentialToken,
   hashCredentialToken,
@@ -63,4 +73,5 @@ module.exports = {
   cleanInstall,
   issueCredential,
   findUserByCredential,
+  revokeCredential,
 };
