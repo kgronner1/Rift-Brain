@@ -130,7 +130,7 @@ test('a batch of 20, oldest first, through the 302; the request carries the secr
   assert.deepEqual([body.secret, body.op], [SECRET, 'append']);
   assert.deepEqual(body.rows.map((x) => x['Feedback ID']), ids.slice(0, 20));
   assert.equal(body.rows[0].Player, 'anonymous');
-  assert.ok(!('ip' in body.rows[0]) && !('Triage' in body.rows[0]) && !('Notes' in body.rows[0]));
+  assert.ok(!('Triage' in body.rows[0]) && !('Notes' in body.rows[0]));
   for (const id of ids.slice(0, 20)) assert.equal(store.rows.get(id).sheet_state, 'sent');
   assert.equal(store.rows.get(ids[20]).sheet_state, 'pending');
   await f.tick();

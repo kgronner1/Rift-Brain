@@ -254,3 +254,66 @@ test('RJ 495: 0005 backfills the NULL stats and defaults both columns to 0, and 
   await conn.query(fs.readFileSync(path.join(dir, '0005_stats_defaults.sql'), 'utf8'));
   assert.equal(Number((await conn.query('SELECT COUNT(*) AS n FROM user_stats'))[0][0].n), 3, 'a rerun changes nothing');
 });
+
+async function feedbackShape(conn) {
+  const [cols] = await conn.query(
+    `SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS def, COLLATION_NAME AS coll
+     FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'feedback' ORDER BY ORDINAL_POSITION`);
+  const [keys] = await conn.query(
+    `SELECT INDEX_NAME AS k, GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS cols FROM INFORMATION_SCHEMA.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'feedback' GROUP BY INDEX_NAME ORDER BY INDEX_NAME`);
+  const [[table]] = await conn.query(
+    "SELECT TABLE_COLLATION AS coll FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'feedback'");
+  return { cols, keys, coll: table.coll };
+}
+
+// The InnoDB tablespace holding feedback: a rebuild moves the table to a new one; an instant ALTER keeps the old one,
+// and with it the dropped column's bytes.
+async function feedbackSpace(conn) {
+  const [[r]] = await conn.query(
+    "SELECT SPACE AS space FROM INFORMATION_SCHEMA.INNODB_SYS_TABLES WHERE NAME = CONCAT(DATABASE(), '/feedback')");
+  return Number(r.space);
+}
+
+test('RJ 504: 0006 drops feedback.ip from a populated table by a rebuild, keeps everything else, and reruns cleanly', { skip }, async (t) => {
+  const conn = await freshDatabase(t);
+  const dir = realMigrations(t, 5);
+  await migrate(conn, { dir, log: quiet });
+  for (let i = 1; i <= 30; i++) {
+    const anon = i % 3 === 0;
+    await conn.query(
+      `INSERT INTO feedback (id, received_at, written_at, user_id, username, install_id, ip, build, platform, env, tags,
+         message, context, sheet_state, anonymized_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'dev', ?, ?, ?, ?, ?)`,
+      [`22222222-0000-4000-8000-${String(i).padStart(12, '0')}`, `2026-10-14 18:00:00.${String(i).padStart(3, '0')}`,
+        i % 2 ? '2026-10-14T17:59:00Z' : null, anon ? null : i, anon ? null : `Pilot_${i}`,
+        anon ? null : `6f1c2b8e-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        anon ? null : (i === 1 ? '2001:db8::1' : `198.51.100.${i}`), 1000 + i, i % 2 ? 'android' : 'ios', 'bug,idea',
+        `note ${i} 🎮 Ünï`, JSON.stringify({ where: 'main_menu', i }), anon ? 'anon_pending' : 'pending',
+        anon ? '2026-10-15 00:00:00.000' : null]);
+  }
+  const [[{ withIp }]] = await conn.query('SELECT COUNT(*) AS withIp FROM feedback WHERE ip IS NOT NULL');
+  assert.equal(Number(withIp), 20, 'the measurement: the rows hold addresses before 0006');
+  const shapeBefore = await feedbackShape(conn);
+  const spaceBefore = await feedbackSpace(conn);
+  const [rowsBefore] = await conn.query('SELECT * FROM feedback ORDER BY id');
+
+  fs.copyFileSync(path.join(MIGRATIONS_DIR, '0006_feedback_drop_ip.sql'), path.join(dir, '0006_feedback_drop_ip.sql'));
+  assert.deepEqual((await migrate(conn, { dir, log: quiet })).applied, ['0006_feedback_drop_ip.sql']);
+
+  const shape = await feedbackShape(conn);
+  assert.deepEqual(shape, { ...shapeBefore, cols: shapeBefore.cols.filter((c) => c.name !== 'ip') }, 'only ip is gone');
+  assert.ok(shapeBefore.cols.some((c) => c.name === 'ip') && shape.coll === 'utf8mb4_unicode_ci');
+  const [rowsAfter] = await conn.query('SELECT * FROM feedback ORDER BY id');
+  assert.deepEqual(rowsAfter, rowsBefore.map(({ ip, ...rest }) => rest), 'every row as it was, but its address');
+  const spaceAfter = await feedbackSpace(conn);
+  assert.notEqual(spaceAfter, spaceBefore, 'rebuilt into a new tablespace, not dropped instantly');
+
+  await conn.query(fs.readFileSync(path.join(dir, '0006_feedback_drop_ip.sql'), 'utf8'));
+  assert.deepEqual(await feedbackShape(conn), shape, 'a rerun changes nothing');
+  assert.equal(await feedbackSpace(conn), spaceAfter, 'and rebuilds nothing');
+
+  const { insertFeedback } = require('../src/storage/feedback');
+  const r = await insertFeedback({ id: '22222222-0000-4000-8000-000000000099', received_ms: Date.UTC(2026, 9, 20), written_at: null,
+    user_id: null, username: null, install_id: null, build: null, platform: null, env: 'dev', tags: [], message: 'after', context: {} }, conn);
+  assert.equal(r.duplicate, false, 'the brain writes to the table 0006 leaves');
+});

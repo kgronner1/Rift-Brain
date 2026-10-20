@@ -1,0 +1,12 @@
+# Installed by infra/box/provision.sh (RJ 505). Hourly, so a brain log past 20 MB is rotated within the hour; the
+# rule's `daily` still rotates each log at most once a day otherwise. Persistent: a run missed while the box was down
+# runs at boot.
+[Unit]
+Description=Rift Jumpers: rotate the brains' pm2 logs every hour
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
