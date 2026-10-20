@@ -1,0 +1,22 @@
+# Written by infra/box/provision.sh (RJ 505) as /etc/rj-logrotate.conf; a re-run overwrites it. rj-logrotate.timer
+# runs it hourly with a state file of its own; the box's daily logrotate.timer (/etc/logrotate.conf) never reads it.
+#
+# Every environment's brain logs (pm2's out_file and error_file): rotated once a day, or within the hour once one
+# passes 20 MB; 14 rotated copies kept, gzipped except the newest, and none older than 14 days.
+# copytruncate: pm2 opens its logs in append mode and keeps them open, so the file is copied and then emptied in
+# place. No restart and no pm2 reloadLogs; only lines written in the moment between the copy and the truncate are
+# lost. infra/README.md, "Log rotation (RJ 505)".
+@ROOT@/*/logs/brain.out.log @ROOT@/*/logs/brain.err.log {
+    su @USER@ @GROUP@
+    daily
+    maxsize 20M
+    rotate 14
+    maxage 14
+    dateext
+    dateformat -%Y%m%d-%H%M%S
+    compress
+    delaycompress
+    copytruncate
+    missingok
+    notifempty
+}

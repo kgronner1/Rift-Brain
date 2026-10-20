@@ -12,9 +12,11 @@ infra/deploy_stacks.sh      plan (default) | --changeset | --apply; then attache
 infra/provision_box.sh      the Mac side: copies infra/box/ to the box and runs it over SSH
 infra/box/provision.sh      the box side: Caddy, /opt/rj/<env>, .env, database, pm2 (plan by default)
 infra/box/*.caddy*, caddy.service   Caddy's config and unit, as provision.sh installs them
+infra/box/rj-logrotate.*            the brain logs' rotation rule (a template) and its hourly unit + timer (RJ 505)
 infra/test/caddy_envelope.sh        Docker: the Caddy config validates; brain down -> 503 NET_UNREACHABLE envelope
 infra/test/provision_db.sh          Docker: provision.sh's .env + database steps against MariaDB 10.11
 infra/test/provision_node.sh        Docker: provision.sh's Node 20 steps on the box's own AL2023 release (RJ 477)
+infra/test/provision_logrotate.sh   Docker: provision.sh's logrotate step, and the rule against live pm2 apps (RJ 505)
 config/<env>.client.v1.json the remote config sources (changes go through PRs)
 ops/config/validate.mjs     checks a document: types, clamps, env (src/config/remoteSchema.js)
 ops/config/publish.sh       validate, client parser, lock guard, serial, upload, invalidate, fetch back
@@ -158,11 +160,65 @@ the box with EC2 -> the instance -> Actions -> Security -> Modify IAM role. The 
 Test an alarm's email path without load: `aws --profile rj cloudwatch set-alarm-state --region us-west-1 --alarm-name
 rj-box-cpu-high --state-value ALARM --state-reason test`; the next evaluation puts it back and sends the OK.
 
+## Log rotation (RJ 505)
+
+pm2 writes each brain's output to `/opt/rj/<env>/logs/brain.out.log` and `brain.err.log`, and nothing else rotates
+them. provision.sh's `logrotate` step does, for every environment at once (box-wide, like the reporter: either
+environment's provisioning installs it):
+
+- **The rule** is `/etc/rj-logrotate.conf` (from `infra/box/rj-logrotate.conf.tmpl`), over
+  `/opt/rj/*/logs/brain.out.log` and `brain.err.log`. Each log is rotated once a day (the first run after 00:00 UTC),
+  or within the hour once it passes 20 MB. 14 copies are kept, and none older than 14 days. The copies are
+  `brain.out.log-YYYYMMDD-HHMMSS`, gzipped except the newest. An empty log is not rotated. Copies belong to
+  `ec2-user` (the rule's `su`).
+- **The run.** `rj-logrotate.timer` starts `rj-logrotate.service` every hour (Persistent: a run missed while the box
+  was down happens at boot). It runs `logrotate --state /var/lib/logrotate/rj-logrotate.status /etc/rj-logrotate.conf`.
+  The box's own daily `logrotate.timer` and `/etc/logrotate.d/` are left alone, and never read this rule.
+- **pm2 keeps writing** with the rule's `copytruncate`: the log is copied, then emptied in place. pm2 opens its logs in
+  append mode and keeps them open, so there is no restart and no `pm2 reloadLogs`. pm2's own logrotate template does
+  the same. The cost is the lines written between the copy and the truncate. In the test, at ~370 lines/s, rotating a
+  21 MB log lost 6-8 lines (~20 ms) and a small one 0-1. At alpha's ~0.3 lines/s that is about never.
+- **Why these numbers.** On 2026-10-20 alpha's out log grew ~1.1 MB a day, 99.8% of it Route 53's health check
+  (`GET / 200`), and dev's ~20 KB a day; the err logs were empty. So a normal day rotates by date, and only a flood
+  rotates by size. 14 days covers two weekends of playtests. The worst case is about 15 x 20 MB per log before gzip:
+  ~1.2 GB for all four logs even if none compressed, against the box's 20 GB free.
+- **Not pm2-logrotate.** It is a pm2 module: a Node process that stays resident (tens of MB on a 949 MB box), installed
+  from npm by `pm2 install`. logrotate is AL2023's own (the step installs it with dnf if missing) and costs nothing
+  between runs.
+- **Not in the rule.** Game servers' logs (`logs/servers/`), which the brain caps itself (`src/match/host.js`:
+  5 MB x 200 files, 7 days), and pm2's own `~/.pm2/pm2.log` (a few KB a day).
+
+On the box:
+
+```
+systemctl list-timers rj-logrotate.timer                     # the last and the next run
+journalctl -u rj-logrotate -n 20 -o cat                      # each run's start and finish; logrotate prints only failures
+ls -la /opt/rj/*/logs/                                       # the live logs and their copies
+sudo cat /var/lib/logrotate/rj-logrotate.status              # when each log last rotated
+sudo logrotate -d --state /var/lib/logrotate/rj-logrotate.status /etc/rj-logrotate.conf   # what the next run would do; changes nothing
+zgrep -h '<text>' /opt/rj/dev/logs/brain.out.log*            # search the live log and every copy
+```
+
+`pm2 logs` reads only the live file. `infra/test/provision_logrotate.sh` tests the step, the rule and pm2's file
+handles in Docker on the box's release.
+
+| # | Command | Changes | Undo |
+|---|---|---|---|
+| 1 | `bash infra/provision_box.sh --env dev` | nothing (plan: what the rule covers, the rule and both units to write, the timer to enable) | -- |
+| 2 | `bash infra/provision_box.sh --env dev --apply` | logrotate if missing; `/etc/rj-logrotate.conf`, `rj-logrotate.service` + `.timer`, the timer enabled; one run, which records every log and rotates none under 20 MB. As every deploy, it also moves dev's brain to that commit | "Undo", step 6 |
+
 ## Undo
 
 Until cutover (spec 7a) nothing here touches the legacy brain, `rift_brain`, its binary, TCP 3000 or
 UDP 8080-8085, and today's builds never read any of it. Newest first:
 
+6. **Log rotation** (RJ 505; "Log rotation (RJ 505)"), on the box. The copies already made stay (`rm
+   /opt/rj/*/logs/brain.*.log-*` removes them), and logrotate itself is the system's: leave it.
+   ```
+   sudo systemctl disable --now rj-logrotate.timer
+   sudo rm -f /etc/systemd/system/rj-logrotate.service /etc/systemd/system/rj-logrotate.timer /etc/rj-logrotate.conf /var/lib/logrotate/rj-logrotate.status
+   sudo systemctl daemon-reload
+   ```
 5. **Monitoring** (RJ 487; "Monitoring"). Remove its resources from `rj-box.yaml` and `rj-edge.yaml` and re-run
    `deploy_stacks.sh --apply` (the topics, subscriptions, alarms and the health check go; nothing else changes). On the
    box:

@@ -1,0 +1,19 @@
+# Installed by infra/box/provision.sh (RJ 505). Started by rj-logrotate.timer; rotates the brains' pm2 logs by
+# /etc/rj-logrotate.conf, with a state file of its own. `journalctl -u rj-logrotate` shows each run.
+# Root, like the box's own logrotate.service: the rule's `su` does the file work as the logs' owner.
+[Unit]
+Description=Rift Jumpers: rotate the brains' pm2 logs
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/logrotate --state /var/lib/logrotate/rj-logrotate.status /etc/rj-logrotate.conf
+TimeoutStartSec=300
+Nice=19
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes

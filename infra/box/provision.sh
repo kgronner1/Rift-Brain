@@ -34,7 +34,11 @@
 #      what the per-protocol manifest (servers/manifest.json, written by Wobble Planet's deploy_server.sh) deploys
 #   7. the box-wide metrics reporter (RJ 487), whichever environment runs it: /usr/local/bin/rj-report-metrics and
 #      the systemd units rj-metrics.service + rj-metrics.timer (every 5 min), enabled. Warns when the instance has no
-#      IAM role, since the reporter then cannot send. Removing it: infra/README.md, "Undo", step 6
+#      IAM role, since the reporter then cannot send. Removing it: infra/README.md, "Undo", step 5
+#   8. log rotation for every environment's brain logs (RJ 505), box-wide too: /etc/rj-logrotate.conf (rendered from
+#      rj-logrotate.conf.tmpl and checked with logrotate -d first) and rj-logrotate.service + rj-logrotate.timer
+#      (hourly), enabled; one run. logrotate is AL2023's own (dnf install, if missing). infra/README.md,
+#      "Log rotation (RJ 505)"; removing it: "Undo", step 6
 #
 # Never touched: the legacy rift-brain pm2 app, its checkout and .env, the rift_brain database (read only, by
 # mysqldump), the legacy server binary, TCP 3000 and UDP 8080-8085.
@@ -68,7 +72,7 @@ NODE_BIN="${RJ_NODE_BIN:-/usr/bin/node-$NODE_MAJOR}"
 NPM_BIN="${RJ_NPM_BIN:-/usr/bin/npm-$NODE_MAJOR}"
 TODAY="${RJ_TODAY:-$(date -u +%F)}"
 # Steps a test can switch off (infra/test/provision_db.sh runs the database step alone).
-STEPS="${RJ_PROVISION_STEPS:-preflight memory node caddy layout brain dotenv database pm2 verify metrics}"
+STEPS="${RJ_PROVISION_STEPS:-preflight memory node caddy layout brain dotenv database pm2 verify metrics logrotate}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -730,7 +734,89 @@ step_metrics() {
   fi
 }
 
-for s in preflight memory node caddy layout brain dotenv database pm2 verify metrics; do
+# --- 8. log rotation (RJ 505) --------------------------------------------------------------------------------------
+# Box-wide, like the reporter: one rule over every environment's brain.out.log and brain.err.log, run hourly by
+# rj-logrotate.timer with a state file of its own. The box's daily logrotate.timer and its rules are left alone.
+# rj-logrotate.service names the same two paths.
+LOGROTATE=/usr/sbin/logrotate
+LOGROTATE_CONF=/etc/rj-logrotate.conf
+LOGROTATE_STATE=/var/lib/logrotate/rj-logrotate.status
+LOGROTATE_UNIT_DIR="${RJ_SYSTEMD_DIR:-/etc/systemd/system}"
+step_logrotate() {
+  if [ ! -x "$LOGROTATE" ]; then
+    if [ "$APPLY" = 1 ]; then
+      sudo dnf install -y -q logrotate
+      say "installed $(rpm -q logrotate)"
+    else
+      plan "sudo dnf install logrotate (AL2023's own package; the box image ships it)"
+    fi
+  fi
+  local conf_tmp f
+  conf_tmp="$(mktemp)"
+  sed -e "s|@ROOT@|$RJ_ROOT|g" -e "s|@USER@|$BOX_USER|g" -e "s|@GROUP@|$(id -gn)|g" \
+    "$HERE/rj-logrotate.conf.tmpl" >"$conf_tmp"
+  # logrotate -d changes nothing, and exits 0 even past a bad line: its "error:" lines are the verdict. Run as the box
+  # user, because root skips a rule file that root does not own.
+  if [ -x "$LOGROTATE" ]; then
+    local check covered="" rotated
+    check="$("$LOGROTATE" -d --state "$conf_tmp.state" "$conf_tmp" 2>&1 || true)"
+    if grep -q '^error:' <<<"$check"; then
+      rm -f "$conf_tmp" "$conf_tmp.state"
+      die "the log rotation rule does not check (logrotate -d): $(grep '^error:' <<<"$check" | head -n 3 | tr '\n' ' ')"
+    fi
+    for f in "$ENV_DIR/logs/brain.out.log" "$ENV_DIR/logs/brain.err.log"; do
+      [ ! -f "$f" ] || grep -qxF "considering log $f" <<<"$check" || { rm -f "$conf_tmp"; die "the log rotation rule does not cover $f"; }
+    done
+    while read -r f; do
+      if [ -f "$f" ]; then covered+="${f#"$RJ_ROOT"/} $(du -h --apparent-size "$f" | cut -f1), "; fi
+    done < <(sed -n 's/^considering log //p' <<<"$check")
+    rotated="$(find "$RJ_ROOT" -mindepth 3 -maxdepth 3 -path '*/logs/brain.*.log-*' -type f 2>/dev/null | wc -l)"
+    say "log rotation covers: ${covered%, }; rotated copies: $rotated"
+  else
+    plan "check the rule with logrotate -d once logrotate is installed"
+  fi
+  CHANGED=0
+  install_file "$conf_tmp" "$LOGROTATE_CONF" 0644
+  rm -f "$conf_tmp" "$conf_tmp.state"
+  CHANGED=0
+  install_file "$HERE/rj-logrotate.service" "$LOGROTATE_UNIT_DIR/rj-logrotate.service" 0644
+  install_file "$HERE/rj-logrotate.timer" "$LOGROTATE_UNIT_DIR/rj-logrotate.timer" 0644
+  local units_changed=$CHANGED
+  if [ "$APPLY" = 0 ]; then
+    if systemctl is-enabled --quiet rj-logrotate.timer 2>/dev/null; then
+      [ "$units_changed" = 0 ] || plan "systemctl daemon-reload; restart rj-logrotate.timer"
+    else
+      plan "systemctl enable --now rj-logrotate.timer (logrotate hourly over $LOGROTATE_CONF), then one run: it records each log and rotates only one already past 20 MB"
+    fi
+    return
+  fi
+  [ "$units_changed" = 0 ] || sudo systemctl daemon-reload
+  if systemctl is-enabled --quiet rj-logrotate.timer 2>/dev/null && systemctl is-active --quiet rj-logrotate.timer; then
+    [ "$units_changed" = 0 ] || sudo systemctl restart rj-logrotate.timer
+    say "rj-logrotate.timer is enabled and running"
+  else
+    sudo systemctl enable --now rj-logrotate.timer
+    say "enabled rj-logrotate.timer (hourly)"
+  fi
+  # One run now, so a broken rule shows here and not at midnight. A log logrotate has not seen before counts as rotated
+  # just now, so this run only records it (and rotates a log already past 20 MB).
+  if ! sudo systemctl start rj-logrotate.service; then
+    say "WARNING: rj-logrotate failed: journalctl -u rj-logrotate -n 20"
+    return
+  fi
+  # logrotate exits 0 when it skips a rule file, so the proof is its state file: it tracks this environment's logs.
+  local missing=()
+  for f in "$ENV_DIR/logs/brain.out.log" "$ENV_DIR/logs/brain.err.log"; do
+    [ ! -f "$f" ] || sudo grep -qF "\"$f\" " "$LOGROTATE_STATE" 2>/dev/null || missing+=("$f")
+  done
+  if [ "${#missing[@]}" = 0 ]; then
+    say "PASS rj-logrotate ran and tracks $ENV_NAME's brain logs ($LOGROTATE_STATE)"
+  else
+    say "WARNING: rj-logrotate ran but does not track ${missing[*]}: sudo $LOGROTATE -d --state $LOGROTATE_STATE $LOGROTATE_CONF"
+  fi
+}
+
+for s in preflight memory node caddy layout brain dotenv database pm2 verify metrics logrotate; do
   step_on "$s" || continue
   "step_$s"
 done
