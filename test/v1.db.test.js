@@ -170,6 +170,43 @@ test('credential restore issues a session (no credential), touches last_used_at;
   assert.equal(code(await call('POST', '/v1/session', { body: { credential: ctx.one.credential } })), 'ok');
 });
 
+test('POST /v1/session/revoke (RJ 506) revokes that credential only; a restore or refresh of it is then AUTH_INVALID', { skip }, async () => {
+  const login = await call('POST', '/v1/session', { body: { login: { id: 'one@example.com', password: PASSWORD } } });
+  const { credential, session } = login.body.data;
+  ctx.revoked = credential.token;
+  const row = async () => (await q('SELECT user_id, revoked_at FROM user_credentials WHERE token_hash = ?', [sha256(credential.token)]))[0];
+  const liveBefore = (await q('SELECT COUNT(*) AS n FROM user_credentials WHERE user_id = ? AND revoked_at IS NULL', [ctx.one.id]))[0].n;
+
+  const mismatched = await call('POST', '/v1/session/revoke', { body: { credential: { user_id: ctx.one.id + 1, token: credential.token } } });
+  assert.deepEqual([mismatched.status, mismatched.body], [200, { result: 'ok', data: {} }], 'another user id: the same answer');
+  assert.equal((await row()).revoked_at, null, '...and the credential is untouched');
+  assert.equal(code(await call('POST', '/v1/session', { body: { credential, session: session.token } })), 'ok', 'still live');
+
+  // An expired session in the header does not matter: the credential is the proof.
+  const stale = signSession({ uid: ctx.one.id, env: 'dev', nowSec: Math.floor(Date.now() / 1000) - 7200, keyHex: KEY }).token;
+  const r = await call('POST', '/v1/session/revoke', { token: stale, body: { credential } });
+  assert.deepEqual([r.status, r.body], [200, { result: 'ok', data: {} }]);
+  const revoked = await row();
+  assert.equal(revoked.user_id, ctx.one.id);
+  assert.ok(revoked.revoked_at !== null, 'revoked_at is set');
+  assert.ok(ctx.lines.some((l) => l.includes(`[session] user ${ctx.one.id} revoked a credential`)), ctx.lines.slice(-5).join('\n'));
+
+  const restore = await call('POST', '/v1/session', { body: { credential } });
+  assert.deepEqual([code(restore), restore.body.error.scope], ['AUTH_INVALID', 'account'], 'a revoked credential restores nothing');
+  assert.equal(code(await call('POST', '/v1/session', { body: { credential, session: session.token } })), 'AUTH_INVALID',
+    'nor refreshes: the refresh checks the credential too');
+
+  const again = await call('POST', '/v1/session/revoke', { body: { credential } });
+  assert.deepEqual([again.status, again.body], [200, { result: 'ok', data: {} }], 'already revoked: the same answer');
+  assert.deepEqual((await row()).revoked_at, revoked.revoked_at, 'revoked_at keeps the first revoke\'s time');
+  const unknown = await call('POST', '/v1/session/revoke', { body: { credential: { user_id: ctx.one.id, token: 'B'.repeat(43) } } });
+  assert.deepEqual([unknown.status, unknown.body], [200, { result: 'ok', data: {} }], 'unknown: the same answer');
+
+  const liveAfter = (await q('SELECT COUNT(*) AS n FROM user_credentials WHERE user_id = ? AND revoked_at IS NULL', [ctx.one.id]))[0].n;
+  assert.equal(liveAfter, liveBefore - 1, 'only that one device is signed out');
+  assert.equal(code(await call('POST', '/v1/session', { body: { credential: ctx.one.credential } })), 'ok', 'the account\'s other devices restore');
+});
+
 test('a dev credential or session at another environment\'s brain is refused on its credentials (spec M8 drill)', { skip }, async () => {
   const alphaSession = signSession({ uid: ctx.one.id, env: 'alpha', nowSec: Math.floor(Date.now() / 1000), keyHex: '77'.repeat(32) }).token;
   assert.equal(code(await call('POST', '/v1/me/sp-stats/sync', { token: alphaSession, body: { stats: {} } })), 'AUTH_REQUIRED');
@@ -311,4 +348,5 @@ test('no password, credential token or session token reached the log', { skip },
   assert.ok(!text.includes(PASSWORD));
   assert.ok(!text.includes(ctx.one.credential.token));
   assert.ok(!text.includes(ctx.one.session));
+  assert.ok(ctx.revoked && !text.includes(ctx.revoked), 'nor the revoked credential (RJ 506)');
 });
