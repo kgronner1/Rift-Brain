@@ -17,15 +17,15 @@ function isoFromSql(s) {
   return `${String(s).replace(' ', 'T')}Z`;
 }
 
-// row: { id, received_ms, written_at, user_id, username, install_id, ip, build, platform, env, tags: [], message,
+// row: { id, received_ms, written_at, user_id, username, install_id, build, platform, env, tags: [], message,
 // context: {} }. Returns { duplicate, received_at }: a repeat of a stored id (a duplicate-key race included) changes
 // nothing and reports the stored row's received_at.
 async function insertFeedback(row, db = getDB()) {
   try {
     await db.execute(
-      `INSERT INTO feedback (id, received_at, written_at, user_id, username, install_id, ip, build, platform, env,
-        tags, message, context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [row.id, sqlTime(row.received_ms), row.written_at, row.user_id, row.username, row.install_id, row.ip,
+      `INSERT INTO feedback (id, received_at, written_at, user_id, username, install_id, build, platform, env,
+        tags, message, context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [row.id, sqlTime(row.received_ms), row.written_at, row.user_id, row.username, row.install_id,
         row.build, row.platform, row.env, row.tags.join(','), row.message, JSON.stringify(row.context)],
     );
     return { duplicate: false, received_at: new Date(row.received_ms).toISOString() };
@@ -52,7 +52,7 @@ async function anonymizeFeedbackForUser(userId, { db = getDB(), now = Date.now()
        sheet_attempts = IF(sheet_state = 'sent', 0, sheet_attempts),
        sheet_next_at = IF(sheet_state = 'sent', NULL, sheet_next_at),
        sheet_state = IF(sheet_state = 'sent', 'anon_pending', sheet_state),
-       user_id = NULL, username = NULL, install_id = NULL, ip = NULL,
+       user_id = NULL, username = NULL, install_id = NULL,
        anonymized_at = ?
      WHERE user_id = ?`,
     [sqlTime(now), userId],

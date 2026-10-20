@@ -66,7 +66,8 @@ test('anonymous: ok {id, received_at}, and the row has no user, the install id o
   const row = store.rows.get(id.toLowerCase());
   assert.equal(row.message, 'the jump felt late');
   assert.deepEqual([row.user_id, row.username, row.install_id], [null, null, INSTALL.toLowerCase()]);
-  assert.deepEqual([row.build, row.platform, row.env, row.ip], [29612345, 'android', 'dev', '127.0.0.1']);
+  assert.deepEqual([row.build, row.platform, row.env], [29612345, 'android', 'dev']);
+  assert.ok(!('ip' in row) && !JSON.stringify(row).includes('127.0.0.1'), 'the IP address is never stored (RJ 504)');
   assert.deepEqual(row.tags, ['bug']);
   assert.equal(row.written_at, '2026-10-14T17:59:58Z');
 

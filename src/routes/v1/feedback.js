@@ -8,7 +8,8 @@
 // Who sent it: a valid bearer -> its user (and their username now); no bearer -> anonymous, keeping X-RJ-Install only
 // when it is a UUID; a bad or expired bearer -> AUTH_REQUIRED / AUTH_EXPIRED (optionalSession). A session whose
 // account no longer exists is stored as anonymous.
-// Limits, after the input checks: feedback_per_min_ip, then feedback_per_day_ip (server.rate_limits).
+// Limits, after the input checks: feedback_per_min_ip, then feedback_per_day_ip (server.rate_limits). The sender's IP
+// address keys those limits in memory and is never stored (RJ 504, migrations/0006_feedback_drop_ip.sql).
 // The brain never reads flags.feedback: that flag only hides the client's buttons.
 
 const { sendOk } = require('../../contract/envelope');
@@ -39,7 +40,6 @@ function registerFeedbackRoutes(router, { env, config, now, limiter, rateLimited
       user_id: user ? user.user_id : null,
       username: user ? String(user.username).slice(0, 64) : null,
       install_id: isUuid(client.install) ? client.install.toLowerCase() : null,
-      ip: req.ip ? String(req.ip).slice(0, 45) : null,
       build: client.build > 0 && client.build <= INT_MAX ? client.build : null,
       platform: client.platform ? client.platform.slice(0, 16) : null,
       env: env.ENV,

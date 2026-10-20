@@ -105,6 +105,7 @@ npm run migrate -- --status      # list applied and pending, change nothing
 | `0003_feedback.sql` | the `feedback` table (RJ 488) |
 | `0004_guests.sql` | `users.is_guest`; `users.email` and `users.password` NULL-able; the cull's index (RJ 493) |
 | `0005_stats_defaults.sql` | `user_stats.num_jumps_alltime` and `mp_num_items_stolen_alltime` default to 0, NULLs backfilled (RJ 495) |
+| `0006_feedback_drop_ip.sql` | drops `feedback.ip` and rebuilds the table, so no address stays in its data file (RJ 504) |
 
 **Making `0001_baseline.sql`** (once, by hand, on the box). Over SSH:
 
@@ -403,6 +404,9 @@ forwarder copies it to the Player Feedback sheet through an Apps Script web app.
   is repaired: the message cut to 2000 code points, unknown tags dropped, `written_at` cut to 40, a context over 4 KB
   kept as `{"truncated": true}` plus the top-level keys that fit. A repeat id answers ok and changes nothing.
 - **Limits:** `server.rate_limits.feedback_per_min_ip` and `feedback_per_day_ip`. The brain never reads `flags.feedback`.
+- **No IP address is stored** (RJ 504, Alex 2026-10-20): the sender's address keys the two limits, in memory only.
+  0006 dropped the column 0003 made. What a row does hold about its sender: the user and username when signed in, the
+  install id, build and platform, and the client's context (device model, OS, locale, screen size, the run or match).
 - **Account deletion** (RJ 473) calls `storage.anonymizeFeedbackForUser(userId)`: the feedback stays, nothing names the
   player, and the sheet's Player cell becomes `deleted account`.
 
