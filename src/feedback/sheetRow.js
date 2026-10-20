@@ -3,8 +3,8 @@
 // Script (ops/feedback/apps_script.gs) looks up in row 1. Pure.
 //
 // Everything is a string but Build (a number, or ''). The script turns Received and Written into dates and writes every
-// string as plain text, so nothing a player typed can become a formula. The ip is never sent; Triage and Notes are
-// Alex's and are never sent either.
+// string as plain text, so nothing a player typed can become a formula. Triage and Notes are Alex's and are never
+// sent.
 
 const HEADERS = Object.freeze(['Received', 'Written', 'Env', 'Tags', 'Feedback', 'Player', 'Where', 'Build', 'Platform',
   'Device', 'Run / match', 'Feedback ID', 'Context', 'Triage', 'Notes']);

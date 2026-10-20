@@ -172,7 +172,7 @@ test('setup: a doomed account with data everywhere, a second device, feedback, a
   ctx.fbOther = uuid();
   const row = (id, who) => ({
     id, received_ms: ctx.m.clock.t, written_at: null, user_id: who.id, username: who.username,
-    install_id: who.install, ip: '203.0.113.9', build: 1, platform: 'android', env: 'dev', tags: [], message: 'x', context: {},
+    install_id: who.install, build: 1, platform: 'android', env: 'dev', tags: [], message: 'x', context: {},
   });
   await insertFeedback(row(ctx.fbSent, d));
   await q("UPDATE feedback SET sheet_state = 'sent', sheet_sent_at = NOW(3) WHERE id = ?", [ctx.fbSent]);
@@ -214,7 +214,7 @@ test('DELETE /v1/me: every per-user row gone in one go, the feedback anonymised,
   const fb = Object.fromEntries((await q('SELECT * FROM feedback')).map((x) => [x.id, x]));
   for (const id of [ctx.fbPending, ctx.fbSent]) {
     const x = fb[id];
-    assert.deepEqual([x.user_id, x.username, x.install_id, x.ip], [null, null, null, null], id);
+    assert.deepEqual([x.user_id, x.username, x.install_id], [null, null, null], id);
     assert.ok(x.anonymized_at !== null);
     assert.ok(x.message.length > 0, 'the feedback itself is kept');
   }
@@ -326,7 +326,7 @@ test('deleteUser: one transaction (a failure part way leaves every row), false f
   const victim = ctx.reborn;
   await insertFeedback({
     id: uuid(), received_ms: ctx.m.clock.t, written_at: null, user_id: victim.id, username: victim.username, install_id: null,
-    ip: null, build: 1, platform: 'android', env: 'dev', tags: [], message: 'kept', context: {},
+    build: 1, platform: 'android', env: 'dev', tags: [], message: 'kept', context: {},
   });
   const pool = getDB();
   // The feedback step is last: when it fails, the deletes before it must roll back.

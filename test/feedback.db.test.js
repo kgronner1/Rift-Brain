@@ -101,7 +101,17 @@ test('an emoji message round-trips, cut at 2000 code points, and received_at is 
   assert.deepEqual(JSON.parse(got.context), { where: 'pause_sp', device: { model: 'Pixel 8 — Pro' } });
   assert.deepEqual([got.tags, got.user_id, got.username, got.install_id, got.build, got.platform, got.env, got.sheet_state],
     ['bug,fun', null, null, INSTALL, 120, 'android', 'dev', 'pending']);
-  assert.equal(got.ip, '127.0.0.1');
+  assert.ok(!('ip' in got), 'no ip column (RJ 504)');
+  assert.ok(!Object.values(got).some((v) => String(v).includes('127.0.0.1')), 'the address is in no column');
+});
+
+test('RJ 504: 0006 left no ip column, and running it again changes nothing', { skip }, async () => {
+  const cols = async () => (await ctx.conn.query(
+    "SELECT COLUMN_NAME AS c FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'feedback' ORDER BY ORDINAL_POSITION"))[0].map((r) => r.c);
+  const before = await cols();
+  assert.ok(before.includes('install_id') && !before.includes('ip'), before.join(', '));
+  await ctx.conn.query(fs.readFileSync(path.join(__dirname, '..', 'migrations', '0006_feedback_drop_ip.sql'), 'utf8'));
+  assert.deepEqual(await cols(), before);
 });
 
 test('a signed-in entry carries the user and their username (utf8mb4 from a latin1 users table)', { skip }, async () => {
@@ -121,7 +131,7 @@ test('a repeat id, and a duplicate-key race, answer ok and keep the first row', 
   assert.equal((await row(id)).message, 'first');
 
   const race = uuid();
-  const base = { id: race, written_at: null, user_id: null, username: null, install_id: null, ip: null, build: null,
+  const base = { id: race, written_at: null, user_id: null, username: null, install_id: null, build: null,
     platform: null, env: 'dev', tags: [], context: {} };
   const results = await Promise.all([0, 1, 2, 3, 4].map((i) => insertFeedback({ ...base, message: `racer ${i}`, received_ms: ctx.clock.ms + i })));
   assert.equal(results.filter((x) => !x.duplicate).length, 1);
@@ -153,7 +163,7 @@ test('anonymizeFeedbackForUser: identity gone, sent rows to anon_pending, pendin
   assert.equal(changed, 2);
   for (const id of [sent, pending]) {
     const r = await row(id);
-    assert.deepEqual([r.user_id, r.username, r.install_id, r.ip], [null, null, null, null], id);
+    assert.deepEqual([r.user_id, r.username, r.install_id], [null, null, null], id);
     assert.ok(r.anonymized_at instanceof Date || typeof r.anonymized_at === 'string');
     assert.equal(r.message, id === sent ? 'a' : 'b', 'the feedback itself is kept');
   }
@@ -172,14 +182,13 @@ test('the sheet store: due rows oldest first, the IF(anonymized_at) mark, backof
   const ids = [uuid(), uuid(), uuid()];
   for (const [i, id] of ids.entries()) {
     await insertFeedback({ id, received_ms: t - (3 - i) * 1000, written_at: 'w', user_id: ctx.uid, username: 'Pilot_Ünï',
-      install_id: null, ip: '1.2.3.4', build: 5, platform: 'ios', env: 'dev', tags: ['idea'], message: `m${i} 🎮`, context: { where: 'main_menu' } });
+      install_id: null, build: 5, platform: 'ios', env: 'dev', tags: ['idea'], message: `m${i} 🎮`, context: { where: 'main_menu' } });
   }
   const due = await store.dueForAppend(2, t);
   assert.deepEqual(due.map((r) => r.id), ids.slice(0, 2));
   assert.equal(due[0].received_at, new Date(t - 3000).toISOString());
   assert.equal(due[0].message, 'm0 🎮');
   assert.equal(due[0].anonymized_at, null);
-  assert.ok(!('ip' in due[0]), 'the ip never leaves the database');
 
   // ids[1] is anonymised while its batch is out.
   await anonymizeFeedbackForUser(ctx.uid, { now: t });
@@ -215,7 +224,7 @@ test('the forwarder over the real table: a batch, an anonymise while it is out, 
   const ids = [uuid(), uuid()];
   for (const [i, id] of ids.entries()) {
     await insertFeedback({ id, received_ms: t - 10 + i, written_at: null, user_id: i === 0 ? u.user_id : null,
-      username: i === 0 ? 'Racer' : null, install_id: null, ip: '9.9.9.9', build: null, platform: null, env: 'dev',
+      username: i === 0 ? 'Racer' : null, install_id: null, build: null, platform: null, env: 'dev',
       tags: [], message: `=1+1 ${i} 🎮`, context: {} });
   }
   const posts = [];
