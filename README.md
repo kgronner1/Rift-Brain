@@ -97,6 +97,9 @@ npm run migrate -- --status      # list applied and pending, change nothing
 - An applied migration's file must never change (the run stops); fix forward with a new number.
 - `GET_LOCK` keeps two runs from overlapping. DDL is not transactional, so a migration that fails part way is
   not recorded; write each step to check before it acts (0002 does), so it can simply be run again.
+- A new table, a new `users` column, or a string column in a table the dev scrub keeps is named in
+  `ops/db/scrub_snapshot.sh`'s "Every table" block with how the scrub treats it. Until it is, every scrub stops, and
+  `npm test` fails for a table or a `users` column ("Player data outside production").
 
 | File | What |
 |---|---|
@@ -361,12 +364,12 @@ restart.
 `test/admission_http.test.js` (the routes, no database) and `test/admission.db.test.js` (a grant redeemed for a
 session, against a database built from `migrations/`, with `RJ_TEST_DB`).
 
-## Player data outside production (RJ 469, spec M7)
+## Player data outside production (RJ 469, spec M7; every table, RJ 511)
 
-**The rule.** Real player data lives only in production's database (today the legacy `rift_brain`; after cutover
-`rift_brain_alpha`). Any copy of it anywhere else -- `rift_brain_dev`, a laptop, a test fixture -- is scrubbed
-before anyone uses it, with `ops/db/scrub_snapshot.sh`. Alpha and production are never scrubbed in place:
-the script refuses any target whose name contains `alpha` or `prod`, and `rift_brain` itself.
+**The rule.** Real player data lives only in production's database: `rift_brain_alpha` since the cutover
+(2026-10-11), the legacy `rift_brain` before it. Any copy of it anywhere else -- `rift_brain_dev`, a laptop, a test
+fixture -- is scrubbed before anyone uses it, with `ops/db/scrub_snapshot.sh`. Alpha and production are never
+scrubbed in place: the script refuses any target whose name contains `alpha` or `prod`, and `rift_brain` itself.
 
 ```
 bash ops/db/scrub_snapshot.sh dev rift_brain_dev                  # PLAN: read-only, says what it would change
@@ -375,14 +378,35 @@ bash ops/db/scrub_snapshot.sh legacy rj_snapshot_x --apply        # copy rift_br
 ... --box                                                         # from the Mac: the same, run on the box over SSH
 ```
 
-A scrub, in one transaction: `users.email = user<id>@example.invalid`, `users.username = user<id>`, every
-`users.password` the one fixed bcrypt hash of `riftjumpers-dev` (printed at the end; every account then signs in
-with it, by either name), `users.access_token` cleared where it still exists, and every `user_credentials` row
-deleted. No other table holds personal data. It is safe to re-run, and a scrubbed database scrubs to itself.
+A scrub, in one transaction, table by table:
 
-A fresh copy into dev (`provision_box.sh --env dev --recopy-db`) brings real data back: scrub straight after it.
-The scrubbed password is public on purpose (this repository is public), so a scrubbed database holds no account
-worth protecting. `infra/test/provision_db.sh` tests the script in Docker, the refusals included.
+- **`users`:** `email = user<id>@example.invalid`, `username = user<id>`, every `password` the one fixed bcrypt hash
+  of `riftjumpers-dev` (printed at the end; every account then signs in with it, by either name), and
+  `access_token` cleared where it still exists.
+- **`user_credentials`:** every row deleted, each device's install id with it. Every device signed in must sign in
+  again; a guest never signs in with a password, so a scrub leaves it no way back in, and the guest cull removes it.
+- **`feedback`:** every row deleted. A row holds its sender's username and install id, text a player typed (which
+  can hold anything), and the device's details; dev needs no other environment's feedback, and with no rows the
+  forwarder can never send a copied one to the sheet. In place, the scrub deletes dev's own feedback too: rows
+  `sent` are on the sheet already, it warns of any still `pending`, and it refuses while any is `anon_pending` (the
+  sheet names a deleted account until the forwarder rewrites that row).
+- **Kept as they are:** `user_stats`, `user_accolades`, `user_accolades_time_earned`, `user_player_card` and
+  `schema_migrations` hold numbers, times, an accolade key and the migrations' names, keyed by the `user_id` the
+  `users` step has made anonymous.
+
+**Nothing new slips through.** The script names every table in its "Every table" block. Before it copies or changes
+anything, PLAN included, it fails on a table it does not name, a `users` column it does not name, or a string column
+in a kept table other than the ones it names; a new number column (the next accolade) passes. `npm test`
+(`test/scrub_tables.test.js`) fails on a migration's new table or `users` column the script does not name. A copy
+the script made is dropped, its dump with it, if anything after the copy fails. A scrub is safe to re-run, and a
+scrubbed database scrubs to itself.
+
+A fresh copy into dev (`provision_box.sh --env dev --recopy-db`; it copies `rift_brain`, so it needs the retired
+legacy database restored first) brings real data back: scrub straight after it. The scrubbed password is public on
+purpose (this repository is public), so a scrubbed database holds no account worth protecting.
+`infra/test/provision_db.sh` tests the script in Docker with the box's provisioning, the refusals included;
+`ops/db/test/scrub_snapshot.sh` tests every table: a player's details in every string column before a scrub and
+none after, in place and in a copy, and the guard.
 
 ## Release drills (RJ 470, spec M8)
 
