@@ -215,8 +215,11 @@ review. The choices made where the spec was silent, also in `src/routes/v1/sessi
 - **The log** gets `[session] user <id> revoked a credential` when a row changed, and nothing otherwise. The token is
   never logged.
 
-The client (Wobble Planet `Net.session.logout()`) sends it once, without a bearer, and forgets the credential whatever
-the answer, so logging out offline still works. Wobble Planet `docs/backend-accounts.md`, "Logging out (RJ 506)".
+The client (Wobble Planet `Net.session.logout()`) forgets the credential at once and sends the revoke without a bearer
+through a small outbox on the device (RJ 509), which sends it again after no answer, a 5xx or `RATE_LIMITED`, the next
+boot included; `ok`, `VALIDATION` and `AUTH_INVALID` end it. A password login or a new account over a guest's or another
+account's credential revokes the replaced one the same way (RJ 508). Wobble Planet `docs/backend-accounts.md`,
+"Logging out (RJ 506)".
 
 **Tests.** `test/session_revoke_http.test.js` covers the checks in order, the one answer, no session, no admission and
 the gates, with no database. `test/v1.db.test.js` covers the real revoke against `migrations/`: the restore and the
