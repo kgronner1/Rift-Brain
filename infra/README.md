@@ -137,6 +137,9 @@ rj-box's alarms send to the SNS topic `rj-alerts` (us-west-1); `rj-alpha-api-dow
 because Route 53's metrics exist only there. Each topic's email subscription needs one click on "Confirm
 subscription" in AWS's email before anything is delivered.
 
+The health check GETs `/` every 30 s from each of Route 53's checkers, so alpha's brain sees one every few seconds.
+It logs one only when it did not pass it, as `GET / <status>` or `GET / -` (RJ 510; README.md, "API v1 (RJ 465)").
+
 **The reporter.** `infra/box/report_metrics.sh`, installed by provision.sh's `metrics` step as
 `/usr/local/bin/rj-report-metrics`, runs from `rj-metrics.timer` every 5 minutes (at :00:30, :05:30, ...) and sends
 `MemAvailableMB`, `SwapUsedMB` and `ActiveMatches` (a total, and per `Env`) to the namespace `RiftJumpers/Box`. A
@@ -177,11 +180,12 @@ environment's provisioning installs it):
 - **pm2 keeps writing** with the rule's `copytruncate`: the log is copied, then emptied in place. pm2 opens its logs in
   append mode and keeps them open, so there is no restart and no `pm2 reloadLogs`. pm2's own logrotate template does
   the same. The cost is the lines written between the copy and the truncate. In the test, at ~370 lines/s, rotating a
-  21 MB log lost 6-8 lines (~20 ms) and a small one 0-1. At alpha's ~0.3 lines/s that is about never.
+  21 MB log lost 6-8 lines (~20 ms) and a small one 0-1. At alpha's ~0.3 lines/s (before RJ 510) that is about never.
 - **Why these numbers.** On 2026-10-20 alpha's out log grew ~1.1 MB a day, 99.8% of it Route 53's health check
-  (`GET / 200`), and dev's ~20 KB a day; the err logs were empty. So a normal day rotates by date, and only a flood
-  rotates by size. 14 days covers two weekends of playtests. The worst case is about 15 x 20 MB per log before gzip:
-  ~1.2 GB for all four logs even if none compressed, against the box's 20 GB free.
+  (`GET / 200`), and dev's ~20 KB a day; the err logs were empty. Since RJ 510 the brain does not log a check it
+  passed; the rest of alpha's log was ~3 KB a day. So a normal day rotates by date, and only a flood rotates by size.
+  14 days covers two weekends of playtests. The worst case is about 15 x 20 MB per log before gzip: ~1.2 GB for all
+  four logs even if none compressed, against the box's 20 GB free.
 - **Not pm2-logrotate.** It is a pm2 module: a Node process that stays resident (tens of MB on a 949 MB box), installed
   from npm by `pm2 install`. logrotate is AL2023's own (the step installs it with dnf if missing) and costs nothing
   between runs.

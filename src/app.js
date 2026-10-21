@@ -39,6 +39,16 @@ function logFatalError(err, context) {
   });
 }
 
+// RJ 510: Route 53's health check of alpha (infra/cfn/rj-edge.yaml) GETs / every few seconds, and was 99.8% of the
+// log. A check the brain answered 2xx is not logged. Anything else at / is: a check answered otherwise or never
+// answered (no headers sent), a query string, another method or another User-Agent.
+const ROUTE53_UA = /^Amazon-Route53-Health-Check-Service\b/;
+
+function isPassedHealthCheck(req, res) {
+  return req.method === 'GET' && req.originalUrl === '/' && res.headersSent
+    && res.statusCode >= 200 && res.statusCode < 300 && ROUTE53_UA.test(req.get('user-agent') || '');
+}
+
 // The public app: /v1 (RJ 465) when `v1` is given, and today's routes, unchanged. Takes the registry so tests can
 // drive it without a database. v1: {env, remote, now?, match?} (routes/v1/index.js).
 // lobbies: the legacy registry (match/lobbies.js); null in a new environment. Only the legacy brain serves today's
@@ -52,7 +62,7 @@ function createPublicApp(lobbies, { v1 } = {}) {
   if (v1) app.use('/v1', createV1Router(v1));
   app.use(express.json());
   // Keep request logging minimal and low overhead; through log.js, like every other line.
-  app.use(morgan('tiny', { stream: log.stream }));
+  app.use(morgan('tiny', { stream: log.stream, skip: isPassedHealthCheck }));
 
   if (lobbies) {
     registerLobbyRoutes(app, lobbies);

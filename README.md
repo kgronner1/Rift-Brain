@@ -97,6 +97,9 @@ npm run migrate -- --status      # list applied and pending, change nothing
 - An applied migration's file must never change (the run stops); fix forward with a new number.
 - `GET_LOCK` keeps two runs from overlapping. DDL is not transactional, so a migration that fails part way is
   not recorded; write each step to check before it acts (0002 does), so it can simply be run again.
+- A new table, a new `users` column, or a string column in a table the dev scrub keeps is named in
+  `ops/db/scrub_snapshot.sh`'s "Every table" block with how the scrub treats it. Until it is, every scrub stops, and
+  `npm test` fails for a table or a `users` column ("Player data outside production").
 
 | File | What |
 |---|---|
@@ -160,7 +163,14 @@ section 4: any change to it needs Alex and Kyler.
   (RJ 506, the restore's limit in a bucket of its own), account deletes per account (RJ 473). Over a limit:
   `RATE_LIMITED` with `retry: after` and `Retry-After`.
 - **Logs** go through `src/log.js`, which redacts any value under a key naming a password, token, credential,
-  authorization, grant or session, and anything shaped like one of our tokens. Request bodies are never logged.
+  authorization, grant or session, and anything shaped like one of our tokens. Request bodies are never logged. A
+  `/v1` request gets its `[v1]` line; any other request gets morgan's `tiny` line (`GET /favicon.ico 404 150 - 0.3 ms`).
+- **A health check the brain passed is not logged** (RJ 510). Route 53's check of alpha (`infra/cfn/rj-edge.yaml`)
+  GETs `/` every few seconds, and was 99.8% of alpha's log (~1 MB a day). `src/app.js` leaves out a `GET /` with no
+  query, answered 2xx, from a User-Agent starting `Amazon-Route53-Health-Check-Service`. Everything else at `/` is
+  logged: a check answered otherwise (`GET / 503 ...`) or never answered (`GET / - ...`), a query string, another
+  method or another User-Agent. Whether the check passes is its alarm's to tell, `rj-alpha-api-down`
+  (infra/README.md, "Monitoring (RJ 487)"), not the log's.
 - **`fixtures/join_token_v1.txt`** is the client's cross-language test (Wobble Planet copies it to
   `Tools/harness/fixtures/`). `node fixtures/build_join_token_v1.js --write` rebuilds it; `npm test` fails if it drifts.
 
@@ -205,8 +215,11 @@ review. The choices made where the spec was silent, also in `src/routes/v1/sessi
 - **The log** gets `[session] user <id> revoked a credential` when a row changed, and nothing otherwise. The token is
   never logged.
 
-The client (Wobble Planet `Net.session.logout()`) sends it once, without a bearer, and forgets the credential whatever
-the answer, so logging out offline still works. Wobble Planet `docs/backend-accounts.md`, "Logging out (RJ 506)".
+The client (Wobble Planet `Net.session.logout()`) forgets the credential at once and sends the revoke without a bearer
+through a small outbox on the device (RJ 509), which sends it again after no answer, a 5xx or `RATE_LIMITED`, the next
+boot included; `ok`, `VALIDATION` and `AUTH_INVALID` end it. A password login or a new account over a guest's or another
+account's credential revokes the replaced one the same way (RJ 508). Wobble Planet `docs/backend-accounts.md`,
+"Logging out (RJ 506)".
 
 **Tests.** `test/session_revoke_http.test.js` covers the checks in order, the one answer, no session, no admission and
 the gates, with no database. `test/v1.db.test.js` covers the real revoke against `migrations/`: the restore and the
@@ -354,12 +367,12 @@ restart.
 `test/admission_http.test.js` (the routes, no database) and `test/admission.db.test.js` (a grant redeemed for a
 session, against a database built from `migrations/`, with `RJ_TEST_DB`).
 
-## Player data outside production (RJ 469, spec M7)
+## Player data outside production (RJ 469, spec M7; every table, RJ 511)
 
-**The rule.** Real player data lives only in production's database (today the legacy `rift_brain`; after cutover
-`rift_brain_alpha`). Any copy of it anywhere else -- `rift_brain_dev`, a laptop, a test fixture -- is scrubbed
-before anyone uses it, with `ops/db/scrub_snapshot.sh`. Alpha and production are never scrubbed in place:
-the script refuses any target whose name contains `alpha` or `prod`, and `rift_brain` itself.
+**The rule.** Real player data lives only in production's database: `rift_brain_alpha` since the cutover
+(2026-10-11), the legacy `rift_brain` before it. Any copy of it anywhere else -- `rift_brain_dev`, a laptop, a test
+fixture -- is scrubbed before anyone uses it, with `ops/db/scrub_snapshot.sh`. Alpha and production are never
+scrubbed in place: the script refuses any target whose name contains `alpha` or `prod`, and `rift_brain` itself.
 
 ```
 bash ops/db/scrub_snapshot.sh dev rift_brain_dev                  # PLAN: read-only, says what it would change
@@ -368,14 +381,35 @@ bash ops/db/scrub_snapshot.sh legacy rj_snapshot_x --apply        # copy rift_br
 ... --box                                                         # from the Mac: the same, run on the box over SSH
 ```
 
-A scrub, in one transaction: `users.email = user<id>@example.invalid`, `users.username = user<id>`, every
-`users.password` the one fixed bcrypt hash of `riftjumpers-dev` (printed at the end; every account then signs in
-with it, by either name), `users.access_token` cleared where it still exists, and every `user_credentials` row
-deleted. No other table holds personal data. It is safe to re-run, and a scrubbed database scrubs to itself.
+A scrub, in one transaction, table by table:
 
-A fresh copy into dev (`provision_box.sh --env dev --recopy-db`) brings real data back: scrub straight after it.
-The scrubbed password is public on purpose (this repository is public), so a scrubbed database holds no account
-worth protecting. `infra/test/provision_db.sh` tests the script in Docker, the refusals included.
+- **`users`:** `email = user<id>@example.invalid`, `username = user<id>`, every `password` the one fixed bcrypt hash
+  of `riftjumpers-dev` (printed at the end; every account then signs in with it, by either name), and
+  `access_token` cleared where it still exists.
+- **`user_credentials`:** every row deleted, each device's install id with it. Every device signed in must sign in
+  again; a guest never signs in with a password, so a scrub leaves it no way back in, and the guest cull removes it.
+- **`feedback`:** every row deleted. A row holds its sender's username and install id, text a player typed (which
+  can hold anything), and the device's details; dev needs no other environment's feedback, and with no rows the
+  forwarder can never send a copied one to the sheet. In place, the scrub deletes dev's own feedback too: rows
+  `sent` are on the sheet already, it warns of any still `pending`, and it refuses while any is `anon_pending` (the
+  sheet names a deleted account until the forwarder rewrites that row).
+- **Kept as they are:** `user_stats`, `user_accolades`, `user_accolades_time_earned`, `user_player_card` and
+  `schema_migrations` hold numbers, times, an accolade key and the migrations' names, keyed by the `user_id` the
+  `users` step has made anonymous.
+
+**Nothing new slips through.** The script names every table in its "Every table" block. Before it copies or changes
+anything, PLAN included, it fails on a table it does not name, a `users` column it does not name, or a string column
+in a kept table other than the ones it names; a new number column (the next accolade) passes. `npm test`
+(`test/scrub_tables.test.js`) fails on a migration's new table or `users` column the script does not name. A copy
+the script made is dropped, its dump with it, if anything after the copy fails. A scrub is safe to re-run, and a
+scrubbed database scrubs to itself.
+
+A fresh copy into dev (`provision_box.sh --env dev --recopy-db`; it copies `rift_brain`, so it needs the retired
+legacy database restored first) brings real data back: scrub straight after it. The scrubbed password is public on
+purpose (this repository is public), so a scrubbed database holds no account worth protecting.
+`infra/test/provision_db.sh` tests the script in Docker with the box's provisioning, the refusals included;
+`ops/db/test/scrub_snapshot.sh` tests every table: a player's details in every string column before a scrub and
+none after, in place and in a copy, and the guard.
 
 ## Release drills (RJ 470, spec M8)
 
