@@ -160,7 +160,14 @@ section 4: any change to it needs Alex and Kyler.
   (RJ 506, the restore's limit in a bucket of its own), account deletes per account (RJ 473). Over a limit:
   `RATE_LIMITED` with `retry: after` and `Retry-After`.
 - **Logs** go through `src/log.js`, which redacts any value under a key naming a password, token, credential,
-  authorization, grant or session, and anything shaped like one of our tokens. Request bodies are never logged.
+  authorization, grant or session, and anything shaped like one of our tokens. Request bodies are never logged. A
+  `/v1` request gets its `[v1]` line; any other request gets morgan's `tiny` line (`GET /favicon.ico 404 150 - 0.3 ms`).
+- **A health check the brain passed is not logged** (RJ 510). Route 53's check of alpha (`infra/cfn/rj-edge.yaml`)
+  GETs `/` every few seconds, and was 99.8% of alpha's log (~1 MB a day). `src/app.js` leaves out a `GET /` with no
+  query, answered 2xx, from a User-Agent starting `Amazon-Route53-Health-Check-Service`. Everything else at `/` is
+  logged: a check answered otherwise (`GET / 503 ...`) or never answered (`GET / - ...`), a query string, another
+  method or another User-Agent. Whether the check passes is its alarm's to tell, `rj-alpha-api-down`
+  (infra/README.md, "Monitoring (RJ 487)"), not the log's.
 - **`fixtures/join_token_v1.txt`** is the client's cross-language test (Wobble Planet copies it to
   `Tools/harness/fixtures/`). `node fixtures/build_join_token_v1.js --write` rebuilds it; `npm test` fails if it drifts.
 
