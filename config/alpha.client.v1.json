@@ -7,8 +7,8 @@
   "endpoints": { "api": "https://api.riftjumpers.space" },
   "gates": {
     "min_build": { "default": 0, "android": 0, "ios": 0 },
-    "min_build_multiplayer": { "default": 0, "android": 0, "ios": 0 },
-    "min_wire": 1,
+    "min_build_multiplayer": { "default": 0, "android": 29891316, "ios": 0 },
+    "min_wire": 7,
     "maintenance": { "active": false, "scope": "multiplayer", "title": "", "message": "", "ends_at": null }
   },
   "notice": { "id": "", "level": "info", "message": "", "url": "", "dismissible": true },
