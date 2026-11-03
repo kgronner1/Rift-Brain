@@ -190,6 +190,13 @@ test('lookup: CORS allows the link domain alone, GET only; a preflight answers 2
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get('access-control-allow-origin'), JOIN_ORIGIN);
   assert.equal(pre.headers.get('access-control-allow-methods'), 'GET');
+  // The origins come from the environment (JOIN_PAGE_ORIGINS): a page hosted elsewhere is a setting, not a change.
+  const moved = await start(t, { env: { JOIN_PAGE_ORIGINS: ['https://riftjumpers.space', 'https://www.riftjumpers.space'] } });
+  const mid = (await moved.mint()).body.data.invite.id;
+  for (const [origin, allowed] of [['https://www.riftjumpers.space', true], ['https://riftjumpers.space', true], [JOIN_ORIGIN, false]]) {
+    const r = await moved.call('GET', `/v1/invites/${mid}`, { uid: 0, bare: true, hdr: { Origin: origin } });
+    assert.equal(r.headers.get('access-control-allow-origin'), allowed ? origin : null, origin);
+  }
   // Any other method is not the public route: without the client's headers the gates answer.
   const post = await s.call('POST', `/v1/invites/${id}`, { uid: 0, bare: true, body: {} });
   assertError(post, 'ENV_MISMATCH');

@@ -12,9 +12,10 @@
 // The lookup is mounted ahead of the client-header gates (routes/v1/index.js): a browser calls it, with no X-RJ
 // headers, from the link's page. In order: RATE_LIMITED, 60 a minute per IP (bucket invite-lookup-ip); then
 // {valid: false} for an id that is unknown, expired, malformed or whose inviter was deleted, all alike. It answers
-// while flags.invites is off (gap-fill), so a page already open still names the inviter. CORS allows the link
-// domain's origin only, for GET (and its preflight); `Cache-Control: no-store`. The id is kept out of the request's
-// log line (middleware/requestId.js): anyone holding it can follow the inviter for a day.
+// while flags.invites is off (gap-fill), so a page already open still names the inviter. CORS allows only the link
+// page's origins (JOIN_PAGE_ORIGINS; by default JOIN_URL_BASE's own), for GET and its preflight; `Cache-Control:
+// no-store`. The id is kept out of the request's log line (middleware/requestId.js): anyone holding it can follow the
+// inviter for a day.
 
 const { fail, sendOk } = require('../../contract/envelope');
 const log = require('../../log');
@@ -25,14 +26,14 @@ const MINT_PER_HOUR = 30;
 const LOOKUP_PER_MIN = 60;
 const HOUR_MS = 60 * 60 * 1000;
 const INVITES_OFF = 'Invites are off right now. Share your lobby code instead.';
-const JOIN_ORIGIN = 'https://join.riftjumpers.space';
 
-// The one origin the lookup's CORS allows: JOIN_URL_BASE's, else the link domain's.
-function joinOrigin(env) {
+// The origins the lookup's CORS allows: JOIN_PAGE_ORIGINS (config/env.js), else JOIN_URL_BASE's own.
+function pageOrigins(env) {
+  if (Array.isArray(env.JOIN_PAGE_ORIGINS)) return env.JOIN_PAGE_ORIGINS;
   try {
-    return env.JOIN_URL_BASE ? new URL(env.JOIN_URL_BASE).origin : JOIN_ORIGIN;
+    return env.JOIN_URL_BASE ? [new URL(env.JOIN_URL_BASE).origin] : [];
   } catch (e) {
-    return JOIN_ORIGIN;
+    return [];
   }
 }
 
@@ -58,11 +59,12 @@ function registerInviteRoutes(router, { env, config, now, limiter, rateLimited, 
 
 // The public half: register before clientHeaders.
 function registerPublicInviteRoutes(router, { env, now, limiter, rateLimited, invites = storage }) {
-  const origin = joinOrigin(env);
+  const origins = pageOrigins(env);
 
   function cors(req, res) {
     res.setHeader('Vary', 'Origin');
-    if (req.get('Origin') === origin) {
+    const origin = req.get('Origin');
+    if (typeof origin === 'string' && origins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET');
       res.setHeader('Access-Control-Max-Age', '600');
@@ -89,4 +91,4 @@ function registerPublicInviteRoutes(router, { env, now, limiter, rateLimited, in
   }));
 }
 
-module.exports = { registerInviteRoutes, registerPublicInviteRoutes, joinOrigin, INVITES_OFF, MINT_PER_HOUR, LOOKUP_PER_MIN };
+module.exports = { registerInviteRoutes, registerPublicInviteRoutes, pageOrigins, INVITES_OFF, MINT_PER_HOUR, LOOKUP_PER_MIN };

@@ -170,6 +170,7 @@ function loadEnv(raw = process.env) {
   const guestCullFirstSec = readSeconds(raw, 'GUEST_CULL_FIRST_SEC', 300, 0, problems);
   const guestCullEverySec = readSeconds(raw, 'GUEST_CULL_EVERY_SEC', 3600, 1, problems);
   const joinUrlBase = readJoinUrlBase(raw, env, problems);
+  const joinPageOrigins = readJoinPageOrigins(raw, joinUrlBase, problems);
   // RJ 458: how long a follow ticket waits for its inviter to take a seat. A local stack sets it short.
   const followWindowSec = readSeconds(raw, 'FOLLOW_WINDOW_SEC', 600, 1, problems);
 
@@ -200,6 +201,8 @@ function loadEnv(raw = process.env) {
     GUEST_CULL_EVERY_SEC: guestCullEverySec,
     // RJ 458: what an invite's url starts with (no trailing slash), or null: POST /v1/me/invites answers INTERNAL.
     JOIN_URL_BASE: joinUrlBase,
+    // RJ 458: the origins whose pages may read GET /v1/invites/:id (CORS), exactly as a browser sends Origin.
+    JOIN_PAGE_ORIGINS: Object.freeze(joinPageOrigins),
     FOLLOW_WINDOW_SEC: followWindowSec,
   });
 }
@@ -239,6 +242,29 @@ function readJoinUrlBase(raw, env, problems) {
     return null;
   }
   return s;
+}
+
+// JOIN_PAGE_ORIGINS (RJ 458): the origins of the page an invite link opens, which reads GET /v1/invites/:id from the
+// browser; CORS allows these and nothing else. Comma- or space-separated. Unset: JOIN_URL_BASE's own origin (none
+// without one). Each is https://host[:port] (http only for localhost or 127.0.0.1, a local preview), with no path.
+function readJoinPageOrigins(raw, joinUrlBase, problems) {
+  if (isBlank(raw.JOIN_PAGE_ORIGINS)) return joinUrlBase ? [new URL(joinUrlBase).origin] : [];
+  const out = [];
+  for (const part of String(raw.JOIN_PAGE_ORIGINS).split(/[\s,]+/).filter((p) => p !== '')) {
+    let u = null;
+    try {
+      u = new URL(part);
+    } catch (e) {
+      u = null;
+    }
+    const loopback = u && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+    if (!u || !(u.protocol === 'https:' || (u.protocol === 'http:' && loopback)) || u.origin !== part.replace(/\/$/, '')) {
+      problems.push(`JOIN_PAGE_ORIGINS: "${part}" is not an origin (https://host[:port], no path)`);
+      continue;
+    }
+    if (!out.includes(u.origin)) out.push(u.origin);
+  }
+  return out;
 }
 
 // FEEDBACK_SHEET_URL and FEEDBACK_SHEET_SECRET (RJ 489, ops/feedback/README.md): both optional, and both or neither.

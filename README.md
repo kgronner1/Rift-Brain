@@ -59,6 +59,8 @@ src/middleware/         /v1's request id, client-header gates, session auth, rat
 src/auth/               tokens (sign/verify, the lobby key) and device credentials (RJ 465)
 src/routes/v1/          API v1 (RJ 465); /v1/match/join and /v1/queue's lobby kind (RJ 466); its admission kind (RJ 468)
 src/guests/cull.js      the hourly cull of idle guest accounts (RJ 493)
+src/invites/sweep.js    the hourly sweep of expired invites (RJ 458); src/storage/invites.js is the table
+web/join/               a draft of the invite link page and its .well-known files (RJ 458; on hold, not deployed)
 src/admission/          the admission queue in front of sign-in (RJ 468, spec M6), in process memory
 src/feedback/           player feedback (RJ 488/489): the entry's cleaning, the sheet's row, the sheet forwarder
 ops/feedback/           the Player Feedback sheet's Apps Script and its runbook (RJ 489)
@@ -109,6 +111,7 @@ npm run migrate -- --status      # list applied and pending, change nothing
 | `0004_guests.sql` | `users.is_guest`; `users.email` and `users.password` NULL-able; the cull's index (RJ 493) |
 | `0005_stats_defaults.sql` | `user_stats.num_jumps_alltime` and `mp_num_items_stolen_alltime` default to 0, NULLs backfilled (RJ 495) |
 | `0006_feedback_drop_ip.sql` | drops `feedback.ip` and rebuilds the table, so no address stays in its data file (RJ 504) |
+| `0007_invites.sql` | the `invites` table: one row per invite link, cascading on the user's delete (RJ 458) |
 
 **Making `0001_baseline.sql`** (once, by hand, on the box). Over SSH:
 
@@ -311,6 +314,8 @@ heartbeat). `match/results` takes today's array and answers `{players, ignored_u
 `data` (each player's new all-time stats), for the players who took a seat in this lobby; the rest are ignored.
 `match/accolades` answers `{user_accolades, ignored_keys}`, or `VALIDATION` (403) for a player with no seat.
 
+**Invite links** add a fourth mode, `join_user`, and a second ticket kind, `follow`: see "Invite links (RJ 458)".
+
 **Tests.** `test/manifest.test.js`, `test/match_registry.test.js`, `test/match_http.test.js` (every
 `/v1/match/join` outcome), `test/internal_http.test.js` (the lobby key, adoption after a restart, the seat checks)
 `test/match_host.test.js` (a real spawn and UDP test), `test/crash_loop.test.js` (the breaker) and
@@ -388,6 +393,7 @@ A scrub, in one transaction, table by table:
   `access_token` cleared where it still exists.
 - **`user_credentials`:** every row deleted, each device's install id with it. Every device signed in must sign in
   again; a guest never signs in with a password, so a scrub leaves it no way back in, and the guest cull removes it.
+- **`invites`:** every row deleted (RJ 458): each is a live link anyone holding it can use to follow that account.
 - **`feedback`:** every row deleted. A row holds its sender's username and install id, text a player typed (which
   can hold anything), and the device's details; dev needs no other environment's feedback, and with no rows the
   forwarder can never send a copied one to the sheet. In place, the scrub deletes dev's own feedback too: rows
@@ -555,3 +561,54 @@ UPDATE user_credentials SET last_used_at = NOW() - INTERVAL 8 DAY WHERE user_id 
 `test/guest_cull.test.js` (the sweep and its timers), `test/guest_config.test.js` (both config readers, the sources,
 the two `.env` settings), `test/guests.db.test.js` (everything above against a database built from `migrations/`), and
 `test/migrate.db.test.js` (0004 on a populated table, and over a baselined copy).
+
+## Invite links (RJ 458)
+
+A player shares a link that means "join me, wherever I am", live for 24 hours and good for any number of friends. The
+contract is Wobble Planet `specs/invite-links.md`, section 2 (additive to spec section 4; Kyler signs it off in review).
+
+- **Mint:** `POST /v1/me/invites` 🔒 `{}`, ok `{invite: {id, url, expires_in}}`. Every call is a new row in `invites`
+  (`migrations/0007_invites.sql`): 10 characters of `23456789abcdefghjkmnpqrstuvwxyz` from `crypto.randomInt`, live
+  86400 s. `url` is `JOIN_URL_BASE/<id>`; the client never builds one. Refusals, in order: the session;
+  `VALIDATION` "Invites are off right now. Share your lobby code instead." while `flags.invites` is false; `RATE_LIMITED`
+  30 an hour per account (`invite-mint-uid`); `AUTH_INVALID` for a gone account. Guests may mint. Not a multiplayer
+  route.
+- **Lookup:** `GET /v1/invites/:id`, public: mounted ahead of the client-header gates, so a browser calls it with no
+  `X-RJ-*` headers. ok `{valid: true, inviter: {username}, expires_in}` or `{valid: false}` (unknown, expired,
+  malformed, inviter deleted: all alike). `RATE_LIMITED` 60 a minute per IP (`invite-lookup-ip`). CORS allows only
+  `JOIN_PAGE_ORIGINS`, for GET and its preflight; `Cache-Control: no-store`. It answers while `flags.invites` is false.
+  The id never reaches a log line: the request's `[v1]` line shows `/v1/invites/:id`.
+- **Join:** `POST /v1/match/join {mode: "join_user", invite}` 🔒🎮 (the multiplayer gates apply). In order:
+  `VALIDATION` (flag off, no `invite` string); `AUTH_INVALID`; `INVITE_INVALID` (unknown, expired, malformed);
+  `VALIDATION` "That's your own invite."; then where the inviter is. A seat in a lobby of another `(wire, fp)`:
+  `LOBBY_WRONG_VERSION`. A seat in a lobby of the caller's, in `PREGAME` with room: ok, as `join_private`. Mid-match,
+  full or booting: `queued`, kind `lobby` (which for an invite also waits through a full `PREGAME`, where a code join is
+  told `LOBBY_FULL`). No seat: `queued`, kind **`follow`**, message `Waiting for <name> to start a match...`,
+  `expires_in_sec` the window left (600 s; a poll does not extend it). "Holds a seat" is the inviter's reservation if
+  they hold one, else a seat they took.
+- **A follow** is polled at `GET /v1/queue/:ticket` and cancelled with `DELETE`, like any lobby ticket, and dropped
+  after 60 s unpolled (a follower who stops polling is not live). The moment the inviter holds a seat, the brain
+  reserves seats there for the live followers while it has room (FIFO), and their next poll answers ok; the rest turn
+  into the lobby wait for that lobby; a follower on another protocol gets `LOBBY_WRONG_VERSION`. A follower's own
+  followers come along. A window that ends seatless: `FOLLOW_TIMEOUT`. An inviter's deleted account: its followers get
+  `INVITE_INVALID`. A lobby wait from an invite whose lobby ends: `LOBBY_NOT_FOUND` "That match has ended...". Follow
+  tickets live in memory and do not count against `server.lobby_queue_max`; a brain restart drops them
+  (`QUEUE_TICKET_INVALID`).
+- **Quickplay with followers:** a player with live followers on their protocol is placed only in a public lobby with
+  room for 1 + followers (at most a whole lobby), and the spawn counts them. `create_private` and `join_private` take
+  the followers in as above when the inviter's seat comes.
+- **Codes** (additive): `INVITE_INVALID` (404) and `FOLLOW_TIMEOUT` (410), both retry never, scope request, action
+  dismiss. **Config:** `flags.invites` (default true) in both sources; publish it only after Wobble Planet's half has
+  merged, since `publish.sh` runs the client's parser.
+- **Settings (`.env`):** `JOIN_URL_BASE` (unset: dev `https://join.riftjumpers.space/dev`, alpha
+  `https://join.riftjumpers.space`, so a box's existing `.env` needs no new line; prod and legacy have none, and their
+  mint answers `INTERNAL`); `JOIN_PAGE_ORIGINS` (the CORS origins, comma-separated; unset: `JOIN_URL_BASE`'s origin);
+  `FOLLOW_WINDOW_SEC` (default 600; a local stack sets it short to see `FOLLOW_TIMEOUT`). The boot log names all three.
+- **Expired rows** go a few at every mint and the rest in an hourly sweep on the guest cull's cadence
+  (`GUEST_CULL_FIRST_SEC`, `GUEST_CULL_EVERY_SEC`): `[invites] swept <n> expired invite(s)`. An account's delete and
+  the guest cull take its invites (`USER_TABLES`, and the foreign key cascades); the dev scrub empties the table.
+
+**Tests.** `test/invite_registry.test.js` (every join_user outcome, the follow ticket's paths, quickplay with
+followers), `test/invites_http.test.js` (the three routes over HTTP, no database), `test/invite_config.test.js` (the
+flag, the settings, the ids, the sweep), and `test/invites.db.test.js` (0007, mint, lookup, expiry, the sweeps, the
+cascade, the cull and a real join, with `RJ_TEST_DB`). `ops/db/test/scrub_snapshot.sh` holds the scrub's side.

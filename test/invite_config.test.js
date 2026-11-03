@@ -65,6 +65,17 @@ test('JOIN_URL_BASE: dev and alpha default to the link domain; set, an https bas
   }
 });
 
+test('JOIN_PAGE_ORIGINS: JOIN_URL_BASE\'s origin unless set; a list of origins; anything else refuses to boot', () => {
+  assert.deepEqual([...loadEnv(NEW_ENV).JOIN_PAGE_ORIGINS], ['https://join.riftjumpers.space']);
+  assert.deepEqual([...loadEnv({ ...NEW_ENV, JOIN_URL_BASE: 'https://riftjumpers.space/join' }).JOIN_PAGE_ORIGINS], ['https://riftjumpers.space']);
+  assert.deepEqual([...loadEnv({ ...NEW_ENV, ENV: 'prod' }).JOIN_PAGE_ORIGINS], [], 'no link domain, no origin');
+  const set = loadEnv({ ...NEW_ENV, JOIN_PAGE_ORIGINS: 'https://riftjumpers.space, https://www.riftjumpers.space https://riftjumpers.space http://127.0.0.1:48458' });
+  assert.deepEqual([...set.JOIN_PAGE_ORIGINS], ['https://riftjumpers.space', 'https://www.riftjumpers.space', 'http://127.0.0.1:48458']);
+  for (const bad of ['http://riftjumpers.space', 'https://riftjumpers.space/join', 'riftjumpers.space', '*']) {
+    assert.throws(() => loadEnv({ ...NEW_ENV, JOIN_PAGE_ORIGINS: bad }), /JOIN_PAGE_ORIGINS/, bad);
+  }
+});
+
 test('FOLLOW_WINDOW_SEC: 600 unless set; 1..86400', () => {
   assert.equal(loadEnv(NEW_ENV).FOLLOW_WINDOW_SEC, 600);
   assert.equal(loadEnv({ ...NEW_ENV, FOLLOW_WINDOW_SEC: '20' }).FOLLOW_WINDOW_SEC, 20);

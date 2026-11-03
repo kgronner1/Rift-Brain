@@ -158,7 +158,9 @@ async function main() {
   createGuestCull({ config, match, firstMs: env.GUEST_CULL_FIRST_SEC * 1000, everyMs: env.GUEST_CULL_EVERY_SEC * 1000 }).start();
   // RJ 458: expired invites, on the cull's cadence.
   createInviteSweep({ firstMs: env.GUEST_CULL_FIRST_SEC * 1000, everyMs: env.GUEST_CULL_EVERY_SEC * 1000 }).start();
-  if (env.JOIN_URL_BASE) log.info(`[invites] links are ${env.JOIN_URL_BASE}/<id>; a follow waits ${env.FOLLOW_WINDOW_SEC} s`);
+  if (env.JOIN_URL_BASE) {
+    log.info(`[invites] links are ${env.JOIN_URL_BASE}/<id>; the lookup's CORS allows ${env.JOIN_PAGE_ORIGINS.join(', ') || 'no origin'}; a follow waits ${env.FOLLOW_WINDOW_SEC} s`);
+  }
   else log.warn(`[invites] JOIN_URL_BASE is not set for ENV=${env.ENV}: POST /v1/me/invites answers INTERNAL`);
 }
 
