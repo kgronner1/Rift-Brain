@@ -5,7 +5,9 @@ Description: >-
   only). Takes the existing hosted zone; never creates one. Deleting the stack keeps the bucket (DeletionPolicy
   Retain), so a delete-stack always completes; the published documents' sources are in git. Since RJ 487 also the
   Route 53 health check on api.<domain> (alpha) and its alarm, which must live here: Route 53's metrics exist only
-  in us-east-1. It emails through its own topic, rj-alerts-edge.
+  in us-east-1. It emails through its own topic, rj-alerts-edge. Since RJ 458 also join.<domain>, the invite
+  link site: its own private bucket behind its own distribution, which serves index.html for every path but
+  /.well-known/, /assets/ and /robots.txt (a CloudFront Function); ops/join/publish.sh fills it.
 
 Parameters:
   DomainName:
@@ -20,6 +22,11 @@ Parameters:
     Type: String
     Default: config
     AllowedPattern: '^[a-z0-9-]+$'
+  JoinSubdomain:
+    Type: String
+    Default: join
+    AllowedPattern: '^[a-z0-9-]+$'
+    Description: The invite links' host (RJ 458). Links are https://<JoinSubdomain>.<DomainName>/<id> and /dev/<id>.
   AlertEmail:
     Type: String
     NoEcho: true
@@ -184,6 +191,197 @@ Resources:
         HostedZoneId: Z2FDTNDATAQYW2
         EvaluateTargetHealth: false
 
+  # --- join.<domain>: the invite link site (RJ 458) ----------------------------------------------------------------
+  # Its own bucket and distribution, on config's pattern. What it serves: web/join (built by web/join/build.mjs from
+  # web/join/site.json, published by ops/join/publish.sh with each file's content type set explicitly). Android App
+  # Links and Apple's universal links fetch the two /.well-known/ files over HTTPS with no redirect, as application/json.
+
+  JoinCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub '${JoinSubdomain}.${DomainName}'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub '${JoinSubdomain}.${DomainName}'
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: project
+          Value: rift-jumpers
+
+  JoinBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'rj-join-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # The site's source is in git; old versions are only for undoing a bad publish by hand.
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      Tags:
+        - Key: project
+          Value: rift-jumpers
+
+  JoinOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'rj-join-${AWS::AccountId}'
+        Description: CloudFront reads the invite site bucket; nothing else can.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Every invite path (/<id>, /dev/<id>, anything else) is the one page, which reads its own path. Only the
+  # association files, the page's fonts and robots.txt are files of their own.
+  JoinRewriteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub 'rj-join-rewrite-${AWS::AccountId}'
+      AutoPublish: true
+      FunctionConfig:
+        Comment: 'join: index.html for every path but /.well-known/, /assets/ and /robots.txt'
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          if (uri.indexOf('/.well-known/') === 0 || uri.indexOf('/assets/') === 0 || uri === '/robots.txt') {
+            return request;
+          }
+          request.uri = '/index.html';
+          return request;
+        }
+
+  # The invite id is in the path: no Referer carries it to the testers group or the Play Store. The page sets its own
+  # Content-Security-Policy (a meta tag with its inline script's hash); this one only forbids framing it.
+  JoinResponseHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub 'rj-join-${AWS::AccountId}'
+        Comment: Security headers for the invite site
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: false
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: no-referrer
+            Override: true
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: "frame-ancestors 'none'"
+            Override: true
+
+  JoinDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub 'Rift Jumpers invite links (${JoinSubdomain}.${DomainName})'
+        Enabled: true
+        Aliases:
+          - !Sub '${JoinSubdomain}.${DomainName}'
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: join-bucket
+            DomainName: !GetAtt JoinBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt JoinOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: join-bucket
+          # A link typed as http:// still lands; the verifiers fetch https:// directly, with no redirect.
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          # config's policy: honour the object's Cache-Control (publish.sh sets it per file), no query string,
+          # header or cookie in the key.
+          CachePolicyId: !Ref CachePolicy
+          ResponseHeadersPolicyId: !Ref JoinResponseHeaders
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt JoinRewriteFunction.FunctionMetadata.FunctionARN
+        ViewerCertificate:
+          AcmCertificateArn: !Ref JoinCertificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+      Tags:
+        - Key: project
+          Value: rift-jumpers
+
+  JoinBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref JoinBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CloudFrontReadsThroughOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${JoinBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${JoinDistribution}'
+          - Sid: TlsOnly
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt JoinBucket.Arn
+              - !Sub '${JoinBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  JoinAliasA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '${JoinSubdomain}.${DomainName}.'
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt JoinDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+  JoinAliasAAAA:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '${JoinSubdomain}.${DomainName}.'
+      Type: AAAA
+      AliasTarget:
+        DNSName: !GetAtt JoinDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
 
   # --- is alpha answering? (RJ 487) -------------------------------------------------------------------------------
   # The brain's root answers 200 without the X-RJ-* headers; a health check cannot send headers, so never a /v1 route.
@@ -249,3 +447,9 @@ Outputs:
     Value: !Ref AlphaApiHealthCheck
   EdgeAlertTopicArn:
     Value: !Ref EdgeAlertTopic
+  JoinBucketName:
+    Value: !Ref JoinBucket
+  JoinDistributionId:
+    Value: !Ref JoinDistribution
+  JoinBaseUrl:
+    Value: !Sub 'https://${JoinSubdomain}.${DomainName}/'

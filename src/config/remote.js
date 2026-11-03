@@ -30,7 +30,8 @@ function defaultView(env) {
       min_wire: 1,
       maintenance: { active: false, scope: 'multiplayer', title: '', message: '', ends_at: null },
     },
-    flags: { multiplayer: true, quickplay: true, private_lobbies: true, account_creation: true, feedback: true, guest_play: true },
+    flags: { multiplayer: true, quickplay: true, private_lobbies: true, account_creation: true, feedback: true, guest_play: true,
+      invites: true },
     messages: {},
     server: {
       admission: { enabled: false, rate_per_min: 600, burst: 50, grant_ttl_sec: 120, ticket_ttl_sec: 600,

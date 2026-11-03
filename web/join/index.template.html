@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<!--@CSP@-->
+<title>Rift Jumpers invite</title>
+<link rel="icon" href="data:,">
+<link rel="preload" href="/assets/akira-expanded.otf" as="font" type="font/otf" crossorigin>
+<style>
+/* The look of riftjumpers.space (its src/styles/rift.css): Akira Expanded for display type, Michroma for the rest. */
+@font-face {
+  font-family: 'Akira Expanded';
+  src: url('/assets/akira-expanded.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Michroma';
+  src: url('/assets/michroma-regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+:root {
+  --accent: #00f4fd;
+  --accent-light: #80fafe;
+  --accent-scan: rgb(0 244 253 / 0.5);
+  --accent-soft: rgb(0 244 253 / 0.14);
+  --accent-line: rgb(0 244 253 / 0.42);
+  --ink: #f2f6fb;
+  --text: #e6ecf5;
+  --muted: #a9b4c6;
+  --faint: #8793a8;
+  --card: rgb(9 12 22 / 0.8);
+  --hairline: rgb(255 255 255 / 0.1);
+  --display: 'Akira Expanded', 'Michroma', sans-serif;
+}
+* { box-sizing: border-box; }
+html { background: #03040a; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text);
+  background: #03040a;
+  font-family: 'Michroma', 'Eurostile', sans-serif;
+  -webkit-text-size-adjust: 100%;
+  /* The logo's glow reaches past the edges; hidden for a Safari older than 16, which has no clip. */
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+/* A still starfield and the rift's glow above the page. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 130% 55% at 50% -12%, rgb(0 244 253 / 0.16), transparent 62%),
+    radial-gradient(1px 1px at 23px 41px, rgb(255 255 255 / 0.8), transparent 70%),
+    radial-gradient(1px 1px at 141px 97px, rgb(255 255 255 / 0.55), transparent 70%),
+    radial-gradient(1.5px 1.5px at 77px 173px, rgb(128 250 254 / 0.7), transparent 70%),
+    radial-gradient(1px 1px at 189px 23px, rgb(255 255 255 / 0.45), transparent 70%),
+    radial-gradient(1px 1px at 59px 127px, rgb(255 255 255 / 0.35), transparent 70%);
+  background-size: auto, 211px 211px, 233px 233px, 277px 277px, 251px 251px, 197px 197px;
+}
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+main {
+  position: relative;
+  z-index: 1;
+  max-width: 30rem;
+  margin: 0 auto;
+  padding: max(36px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.eyebrow {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.logo-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  margin: 0 0 34px;
+}
+.logo {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  max-width: 100%;
+  font-family: var(--display);
+  font-size: clamp(30px, 10.5vw, 50px);
+  line-height: 0.98;
+  text-transform: uppercase;
+  transform: skewX(-11deg);
+}
+.logo::before {
+  content: '';
+  position: absolute;
+  inset: -18% -8%;
+  z-index: -1;
+  background: radial-gradient(closest-side, rgb(0 244 253 / 0.2), rgb(0 244 253 / 0.06) 60%, transparent);
+}
+.logo-row { display: flex; align-items: center; gap: 0.16em; }
+.scan {
+  /* The fill paints only inside this box, and the italic glyphs overhang their advance: a wide end pad keeps the last
+     letter whole. */
+  padding: 0 0.4em 0 0.12em;
+  margin: 0 -0.4em 0 -0.12em;
+  color: transparent;
+  background: repeating-linear-gradient(180deg, var(--accent-light) 0 3px, var(--accent-scan) 3px 5px);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.speed {
+  flex: 1;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.075em;
+  padding: 0.06em 0;
+}
+.speed span { display: block; height: 0.065em; background: var(--accent-light); }
+.headline {
+  margin: 0 0 14px;
+  text-align: center;
+  font-weight: 400;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--ink);
+}
+.headline .name {
+  display: block;
+  margin: 0 0 10px;
+  font-family: var(--display);
+  font-size: clamp(22px, 7vw, 32px);
+  line-height: 1.1;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.headline .rest { display: block; color: var(--muted); font-size: 13px; }
+.lead { margin: 0 0 24px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.9; }
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 58px;
+  margin: 26px 0;
+  padding: 0 24px;
+  border-radius: 14px;
+  text-decoration: none;
+  font-family: var(--display);
+  font-size: 14px;
+  text-transform: uppercase;
+}
+.btn-light { background: var(--ink); color: #05060b; box-shadow: 0 0 32px var(--accent-soft); }
+.btn-light:active { background: #ffffff; }
+.card {
+  margin: 0 0 22px;
+  padding: 24px 22px 8px;
+  border-radius: 20px;
+  background: var(--card);
+  border: 1px solid rgb(255 255 255 / 0.08);
+}
+.card .eyebrow { margin: 0 0 16px; }
+.steps { list-style: none; margin: 0; padding: 0; }
+.steps li { display: flex; gap: 16px; padding: 16px 0; border-top: 1px solid var(--hairline); }
+.steps li:first-child { border-top: 0; padding-top: 2px; }
+.num { flex: none; padding-top: 3px; font-size: 12px; letter-spacing: 0.2em; color: var(--accent); }
+.step a {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-line);
+  text-underline-offset: 4px;
+  overflow-wrap: anywhere;
+}
+.how { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.8; }
+.warn { margin: 0 0 22px; padding: 2px 0 2px 14px; border-left: 2px solid var(--accent); font-size: 12px; line-height: 1.9; }
+.again { margin: 0 0 22px; text-align: center; color: var(--ink); font-size: 13px; line-height: 1.8; }
+.note { margin: 0 0 18px; text-align: center; color: var(--faint); font-size: 12px; line-height: 1.8; }
+.switches { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 24px; margin: 4px 0 0; }
+.switch {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+}
+.foot { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--hairline); text-align: center; }
+.foot a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--faint);
+}
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header class="logo-wrap">
+    <p class="eyebrow">You're invited</p>
+    <div class="logo" role="img" aria-label="Rift Jumpers">
+      <span class="logo-row" aria-hidden="true"><span class="scan">Rift</span><span class="speed"><span></span><span></span><span></span><span></span></span></span>
+      <span class="scan" aria-hidden="true">Jumpers</span>
+    </div>
+  </header>
+  <h1 class="headline" id="title">Checking your invite...</h1>
+  <p class="lead" id="lead" hidden></p>
+  <div id="body"></div>
+  <footer class="foot"><a href="https://riftjumpers.space">riftjumpers.space</a></footer>
+</main>
+<script>
+(function () {
+  'use strict';
+  var SITE = /*@SITE@*/null;
+  var ID_RE = /^[23456789abcdefghjkmnpqrstuvwxyz]{10}$/;
+  var LOOKUP_TIMEOUT_MS = 8000;
+
+  // "/<id>" is an alpha invite, "/dev/<id>" a dev one; anything else has no id.
+  function parsePath(pathname) {
+    var parts = String(pathname || '/').split('/').filter(function (p) { return p !== ''; });
+    var env = 'alpha';
+    if (parts[0] === 'dev') {
+      env = 'dev';
+      parts.shift();
+    }
+    var id = null;
+    if (parts.length === 1) {
+      var raw = parts[0];
+      try { raw = decodeURIComponent(raw); } catch (e) { raw = ''; }
+      raw = raw.trim().toLowerCase();
+      if (ID_RE.test(raw)) id = raw;
+    }
+    return { env: env, id: id };
+  }
+
+  function platformOf(ua, maxTouchPoints) {
+    ua = String(ua || '');
+    if (/Android/i.test(ua)) return 'android';
+    if (/iPhone|iPad|iPod/i.test(ua)) return 'ios';
+    // iPadOS asks for the desktop site: a Mac that takes touches is an iPad.
+    if (/Macintosh/i.test(ua) && Number(maxTouchPoints) > 1) return 'ios';
+    return 'desktop';
+  }
+
+  function invitePath(env, id) {
+    return (env === 'dev' ? '/dev/' : '/') + id;
+  }
+
+  // Android, for in-app browsers that keep links to themselves: Chrome's intent URL for the right package. Without the
+  // app it comes back to this page, #install.
+  function intentUrl(env, id) {
+    var path = invitePath(env, id);
+    var back = 'https://' + SITE.host + path + '#install';
+    return 'intent://' + SITE.host + path + '#Intent;scheme=https;package=' + SITE.android[env].package
+      + ';S.browser_fallback_url=' + encodeURIComponent(back) + ';end';
+  }
+
+  // iPhone, when the universal link did not fire (an in-app browser): the game's own scheme.
+  function schemeUrl(env, id) {
+    return 'riftjumpers://join' + invitePath(env, id);
+  }
+
+  // The other platforms, in case the user agent misled us.
+  var SWITCHES = {
+    android: [{ platform: 'ios', label: 'On an iPhone instead?' }],
+    ios: [{ platform: 'android', label: 'On Android instead?' }],
+    desktop: [{ platform: 'android', label: 'On Android?' }, { platform: 'ios', label: 'On an iPhone?' }],
+  };
+
+  // What the page says, from what is known. Only the one platform's steps. Pure.
+  //   {title, name?, lead?, open?, steps?, warn?, again?, notes: [], switches: []}
+  // state: {env, id, platform, lookup: 'valid' | 'invalid' | 'error', inviter, installHint}
+  function view(state) {
+    var v = { notes: [], switches: [] };
+    if (!state.id || state.lookup === 'invalid') {
+      v.title = 'This invite has expired; ask your friend for a new one.';
+      return v;
+    }
+    v.switches = SWITCHES[state.platform] || [];
+    if (state.lookup === 'valid' && state.inviter) {
+      v.name = state.inviter;
+      v.title = state.inviter + ' invited you to play Rift Jumpers';
+    } else {
+      v.title = "You've been invited to play Rift Jumpers";
+    }
+    if (state.lookup === 'error') v.notes.push("We couldn't check this invite just now. It may still work: open it in the game.");
+    if (state.platform === 'desktop') {
+      v.lead = 'Open this link on your phone.';
+      return v;
+    }
+    if (state.platform === 'android') {
+      v.open = intentUrl(state.env, state.id);
+      if (state.installHint) v.notes.push("The game isn't on this phone yet.");
+    } else {
+      v.open = schemeUrl(state.env, state.id);
+    }
+    // Dev builds come from the Drive folder: no sign-up steps.
+    if (state.env === 'dev') return v;
+    if (state.platform === 'android') {
+      v.steps = [
+        { text: 'Join the testers group', href: SITE.testers_group_url,
+          how: 'On that page tap Join group at the top, beside the group’s name, or the “joining the group” link under “You don’t have permission to access this content”.' },
+        { text: 'Become a tester', href: SITE.play_testing_url, how: 'Tap Become a tester.' },
+        { text: 'Install Rift Jumpers from Google Play', href: SITE.play_store_url,
+          how: 'Tap Install. If Play says the app isn’t available yet, wait a minute after step 2 and open this step again.' },
+      ];
+      v.warn = 'Use the same Google account for steps 1 and 2 as the Play Store on this phone.';
+      v.again = 'Installed? Tap your invite link again.';
+      return v;
+    }
+    if (SITE.ios.testflight_url) {
+      v.steps = [
+        { text: 'Get TestFlight from the App Store', href: 'https://apps.apple.com/app/testflight/id899247664',
+          how: 'Apple’s app for trying games before release. Skip this if you have it.' },
+        { text: 'Join the Rift Jumpers beta', href: SITE.ios.testflight_url, how: 'Tap Accept, then Install.' },
+      ];
+      v.again = 'Installed? Tap your invite link again.';
+    } else {
+      v.lead = 'Rift Jumpers for iPhone is coming soon.';
+    }
+    return v;
+  }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+
+  var state = null;
+
+  function onSwitch(ev) {
+    state.platform = ev.currentTarget.getAttribute('data-platform');
+    render(view(state));
+    window.scrollTo(0, 0);
+  }
+
+  // Every value goes in as text: an inviter's name is never markup.
+  function render(v) {
+    var title = document.getElementById('title');
+    while (title.firstChild) title.removeChild(title.firstChild);
+    if (v.name) {
+      title.appendChild(el('span', 'name', v.name));
+      title.appendChild(el('span', 'rest', 'invited you to play Rift Jumpers'));
+    } else {
+      title.textContent = v.title;
+    }
+    var lead = document.getElementById('lead');
+    lead.textContent = v.lead || '';
+    lead.hidden = !v.lead;
+    var body = document.getElementById('body');
+    while (body.firstChild) body.removeChild(body.firstChild);
+    for (var i = 0; i < v.notes.length; i++) body.appendChild(el('p', 'note', v.notes[i]));
+    if (v.open) {
+      var a = el('a', 'btn btn-light', 'Open the game');
+      a.href = v.open;
+      body.appendChild(a);
+    }
+    if (v.steps) {
+      var card = el('section', 'card');
+      card.appendChild(el('p', 'eyebrow', v.open ? 'Not installed yet?' : 'Get the game'));
+      var ol = el('ol', 'steps');
+      for (var j = 0; j < v.steps.length; j++) {
+        var s = v.steps[j];
+        var li = el('li');
+        li.appendChild(el('span', 'num', (j < 9 ? '0' : '') + (j + 1)));
+        var step = el('div', 'step');
+        var link = el('a', null, s.text);
+        link.href = s.href;
+        link.rel = 'noopener noreferrer';
+        step.appendChild(link);
+        if (s.how) step.appendChild(el('span', 'how', s.how));
+        li.appendChild(step);
+        ol.appendChild(li);
+      }
+      card.appendChild(ol);
+      body.appendChild(card);
+    }
+    if (v.warn) body.appendChild(el('p', 'warn', v.warn));
+    if (v.again) body.appendChild(el('p', 'again', v.again));
+    if (v.switches.length) {
+      var row = el('div', 'switches');
+      for (var k = 0; k < v.switches.length; k++) {
+        var b = el('button', 'switch', v.switches[k].label);
+        b.type = 'button';
+        b.setAttribute('data-platform', v.switches[k].platform);
+        b.addEventListener('click', onSwitch);
+        row.appendChild(b);
+      }
+      body.appendChild(row);
+    }
+    document.title = v.title;
+  }
+
+  // {lookup, inviter} from GET /v1/invites/:id (Rift-Brain): no headers, no credentials.
+  function lookup(env, id, done) {
+    var finished = false;
+    var finish = function (r) { if (!finished) { finished = true; done(r); } };
+    var ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    setTimeout(function () { if (ctl) ctl.abort(); finish({ lookup: 'error' }); }, LOOKUP_TIMEOUT_MS);
+    fetch(SITE.api[env] + '/v1/invites/' + id, { method: 'GET', credentials: 'omit', cache: 'no-store', signal: ctl ? ctl.signal : undefined })
+      .then(function (res) { return res.json(); })
+      .then(function (b) {
+        if (!b || b.result !== 'ok' || !b.data) return finish({ lookup: 'error' });
+        if (b.data.valid !== true) return finish({ lookup: 'invalid' });
+        var name = b.data.inviter && typeof b.data.inviter.username === 'string' ? b.data.inviter.username : '';
+        finish({ lookup: 'valid', inviter: name.slice(0, 64) });
+      })
+      .catch(function () { finish({ lookup: 'error' }); });
+  }
+
+  var api = { parsePath: parsePath, platformOf: platformOf, intentUrl: intentUrl, schemeUrl: schemeUrl, view: view };
+  if (typeof document === 'undefined') {
+    this.RJJoin = api;
+    return;
+  }
+  var where = parsePath(location.pathname);
+  state = {
+    env: where.env, id: where.id, platform: platformOf(navigator.userAgent, navigator.maxTouchPoints),
+    installHint: location.hash === '#install',
+  };
+  if (!where.id) {
+    state.lookup = 'invalid';
+    render(view(state));
+    return;
+  }
+  lookup(where.env, where.id, function (r) {
+    state.lookup = r.lookup;
+    state.inviter = r.inviter;
+    render(view(state));
+  });
+}).call(this);
+</script>
+</body>
+</html>

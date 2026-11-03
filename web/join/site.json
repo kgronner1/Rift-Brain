@@ -1,0 +1,36 @@
+{
+  "_about": "The invite link site (RJ 458). web/join/build.mjs makes index.html and both .well-known files from this file alone; ops/join/publish.sh publishes them. null is a value not known yet: the site leaves it out (no fingerprint, no iOS association for that app, a coming-soon line) and the build lists it.",
+  "host": "join.riftjumpers.space",
+  "api": {
+    "alpha": "https://api.riftjumpers.space",
+    "dev": "https://api-dev.riftjumpers.space"
+  },
+  "android": {
+    "alpha": {
+      "package": "com.riftjumpers.game",
+      "sha256": {
+        "play_app_signing": "25:7B:CB:30:E5:F9:0F:BC:0E:60:AD:11:FD:04:23:E2:5D:9E:CA:5E:42:CD:A6:A8:85:60:5E:E8:5F:32:23:8C",
+        "upload": null
+      }
+    },
+    "dev": {
+      "package": "com.riftjumpers.game.dev",
+      "sha256": {
+        "debug_keystore_alex_mac": "71:18:81:37:D5:6F:52:74:38:1F:E9:17:62:DE:98:4D:C0:24:F2:BE:E4:F8:53:5B:BA:5B:5F:47:A1:AD:3C:A7"
+      }
+    }
+  },
+  "ios": {
+    "team_id": null,
+    "alpha": {
+      "bundle_id": null
+    },
+    "dev": {
+      "bundle_id": null
+    },
+    "testflight_url": null
+  },
+  "testers_group_url": "https://groups.google.com/g/rift-jumpers-alpha",
+  "play_testing_url": "https://play.google.com/apps/testing/com.riftjumpers.game",
+  "play_store_url": "https://play.google.com/store/apps/details?id=com.riftjumpers.game"
+}

@@ -22,6 +22,7 @@ const { registerStorageRoutes } = require('./routes/legacy/storage');
 const { createFeedbackForwarder } = require('./feedback/forwarder');
 const { createFeedbackSheetStore } = require('./storage/feedback');
 const { createGuestCull } = require('./guests/cull');
+const { createInviteSweep } = require('./invites/sweep');
 
 // Ensure fatal errors have a dedicated log file outside stdout/stderr.
 const fatalLogDir = path.join(__dirname, '..', 'logs');
@@ -144,6 +145,7 @@ async function main() {
     manifest: createManifestReader(env.SERVERS_DIR),
     host: createHost({ serversDir: env.SERVERS_DIR, brainUrl: brainUrlFor(env), logDir: env.SERVER_LOGS_DIR }),
     config,
+    followWindowMs: env.FOLLOW_WINDOW_SEC * 1000,
   });
   // The internal listener first: lobbies that outlived the last brain heartbeat into it from the first moment.
   await listen(createInternalApp({ env, match, config }), env.INTERNAL_PORT, '127.0.0.1', 'internal');
@@ -154,6 +156,12 @@ async function main() {
   startFeedbackForwarder(env, config);
   // RJ 493: idle guests, first after GUEST_CULL_FIRST_SEC, then every GUEST_CULL_EVERY_SEC.
   createGuestCull({ config, match, firstMs: env.GUEST_CULL_FIRST_SEC * 1000, everyMs: env.GUEST_CULL_EVERY_SEC * 1000 }).start();
+  // RJ 458: expired invites, on the cull's cadence.
+  createInviteSweep({ firstMs: env.GUEST_CULL_FIRST_SEC * 1000, everyMs: env.GUEST_CULL_EVERY_SEC * 1000 }).start();
+  if (env.JOIN_URL_BASE) {
+    log.info(`[invites] links are ${env.JOIN_URL_BASE}/<id>; the lookup's CORS allows ${env.JOIN_PAGE_ORIGINS.join(', ') || 'no origin'}; a follow waits ${env.FOLLOW_WINDOW_SEC} s`);
+  }
+  else log.warn(`[invites] JOIN_URL_BASE is not set for ENV=${env.ENV}: POST /v1/me/invites answers INTERNAL`);
 }
 
 // RJ 489: feedback rows go to the Player Feedback sheet only when the box's .env names it (ops/feedback/README.md);

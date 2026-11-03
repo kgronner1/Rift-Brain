@@ -150,6 +150,25 @@ const CODES = Object.freeze({
     scope: 'request',
     action: { kind: 'dismiss' },
   },
+  // RJ 458 (invite links; Wobble Planet specs/invite-links.md, 2.6). Their statuses are gap-fills: the client keys on
+  // the body. INVITE_INVALID: POST /v1/match/join {mode: "join_user"} with an unknown or expired invite.
+  INVITE_INVALID: {
+    status: 404,
+    channels: ['http'],
+    message: 'This invite has expired; ask for a new one.',
+    retry: { kind: 'never' },
+    scope: 'request',
+    action: { kind: 'dismiss' },
+  },
+  // A follow ticket's poll once its window ends with the inviter in no lobby.
+  FOLLOW_TIMEOUT: {
+    status: 410,
+    channels: ['http'],
+    message: "Your friend didn't start a match in time. Tap the invite again to keep waiting.",
+    retry: { kind: 'never' },
+    scope: 'request',
+    action: { kind: 'dismiss' },
+  },
   INTERNAL: {
     status: 500,
     channels: ['http'],
