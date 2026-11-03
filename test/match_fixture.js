@@ -58,7 +58,8 @@ function quietLogger() {
   return { lines, info: add, warn: add, error: add };
 }
 
-// opts: entries, view patch fn, bootGraceMs (0 by default: most tests start past the adoption window), host, clock.
+// opts: entries, view patch fn, bootGraceMs (0 by default: most tests start past the adoption window), host, clock,
+// followWindowMs (RJ 458; the registry's 600 s by default).
 function makeRegistry(opts = {}) {
   const clock = opts.clock || { t: T0 };
   const host = opts.host || fakeHost();
@@ -69,6 +70,7 @@ function makeRegistry(opts = {}) {
     env: ENV, manifest, host, config: () => view, now: () => clock.t, logger,
     bootGraceMs: opts.bootGraceMs === undefined ? 0 : opts.bootGraceMs,
     random: opts.random || Math.random,
+    ...(opts.followWindowMs === undefined ? {} : { followWindowMs: opts.followWindowMs }),
   });
   return { reg, host, view, manifest, clock, logger, advance: (ms) => { clock.t += ms; } };
 }

@@ -5,6 +5,21 @@
 //     lastHeartbeat, adopted, everSeated }
 // and the lobby-wait queue (the `lobby` kind of spec 4.2's `queued`), FIFO in insertion order.
 //
+// Invite links (RJ 458; Wobble Planet specs/invite-links.md, 2.3): join_user joins the inviter wherever they hold a
+// seat, else waits for them as a `follow` ticket (the queue's second kind here):
+// - The inviter's seat is their reservation if they hold one (a join gives up the others), else a seat they took.
+// - Seated in a lobby of the caller's (wire, fp) in PREGAME with room: a seat, as join_private gives. Mid-match, full,
+//   or booting: the lobby wait, which for an invite (gap-fill) waits while the lobby is full in PREGAME too, rather
+//   than failing LOBBY_FULL as a code join's does (spec 1 and 2.3: "full" means the next seat or the next PREGAME).
+// - No seat: a follow ticket, for followWindowMs (600 s; FOLLOW_WINDOW_SEC). It is polled and dropped like a lobby
+//   ticket (60 s unpolled: a follower who stops polling is no longer live). The moment the inviter holds a seat its
+//   live followers are seated there while it has room, FIFO, and the rest turn into the lobby wait above; a follower
+//   on another protocol is told LOBBY_WRONG_VERSION. Followers of a follower come along the same way. A window that
+//   ends with no seat answers FOLLOW_TIMEOUT. An inviter's deleted account fails its followers with INVITE_INVALID.
+// - Quickplay counts a player's live followers on their protocol: it places them only in a public lobby with room for
+//   1 + followers (at most a whole lobby), and spawns for them as for that many players.
+// - Follow tickets wait on a person, not on capacity: they do not count against server.lobby_queue_max.
+//
 // - Routing: a client on (wire, fp) plays only in (wire, fp) lobbies; manifest.js says which pairs are deployed.
 // - A join token reserves a seat for its 60 s; capacity is seated humans + reservations + bots < 4.
 // - A lobby is spawned on a port of GAME_PORTS that no lobby holds and that passes a UDP bind test.
@@ -31,6 +46,10 @@ const EMPTY_LOBBY_MS = 120 * 1000;
 const SEAT_RESERVATION_MS = JOIN_TTL_SEC * 1000;
 // An admitted ticket holds its seat this long for the poll that collects the token.
 const ADMITTED_HOLD_MS = 15 * 1000;
+// A follow ticket waits this long for its inviter to take a seat (createMatchRegistry's followWindowMs overrides it).
+const FOLLOW_WINDOW_MS = 600 * 1000;
+// What a player waiting on an invite reads when their lobby wait cannot go on.
+const MATCH_ENDED = 'That match has ended. Tap the invite again to follow your friend.';
 // A ticket nobody polls for this long is dropped (and `expires_in_sec` says so).
 const TICKET_TTL_MS = 60 * 1000;
 const POLL_MS = 3000;
@@ -77,6 +96,7 @@ function createMatchRegistry({
   bootGraceMs = BOOT_GRACE_MS,
   crashLoopLimit = CRASH_LOOP_LIMIT,
   crashCooldownMs = CRASH_COOLDOWN_MS,
+  followWindowMs = FOLLOW_WINDOW_MS,
 }) {
   const lobbies = new Map();
   const tickets = new Map();
@@ -114,6 +134,19 @@ function createMatchRegistry({
 
   function hasRoom(lobby) {
     return occupancy(lobby) < MAX_PLAYERS;
+  }
+
+  // The lobby where user <uid> holds a seat: their reservation if they hold one, else a seat they took, else null.
+  function seatLobby(uid) {
+    let seated = null;
+    for (const l of lobbies.values()) {
+      for (const s of l.seats.values()) {
+        if (s.uid !== uid) continue;
+        if (s.status === 'reserved') return l;
+        if (!seated) seated = l;
+      }
+    }
+    return seated;
   }
 
   function reserve(lobby, { uid, uname }, holdMs) {
@@ -263,8 +296,7 @@ function createMatchRegistry({
       if (t.admitted && t.admitted.lobbyId === lobby.id) t.admitted = null;
       if (!t.failed && t.target.type === 'lobby' && t.target.lobbyId === lobby.id) {
         // A player who was waiting on this lobby learns it is gone; a public player simply waits for another.
-        t.failed = t.target.host ? 'INTERNAL' : 'LOBBY_NOT_FOUND';
-        t.failedAt = now();
+        lobbyGone(t);
       }
     }
     try {
@@ -276,11 +308,13 @@ function createMatchRegistry({
     }
   }
 
-  // The public (wire, fp) lobby a quickplay player joins: PREGAME, with room, the fullest first.
-  function bestPublicLobby(wire, fp) {
+  // The public (wire, fp) lobby a quickplay player joins: PREGAME, with room for `seats` (them and their followers),
+  // the fullest first.
+  function bestPublicLobby(wire, fp, seats = 1) {
     let best = null;
     for (const l of lobbies.values()) {
-      if (l.privateCode || l.state !== 'PREGAME' || l.wire !== wire || l.fp !== fp || !hasRoom(l)) continue;
+      if (l.privateCode || l.state !== 'PREGAME' || l.wire !== wire || l.fp !== fp) continue;
+      if (MAX_PLAYERS - occupancy(l) < seats) continue;
       if (!best || occupancy(l) > occupancy(best)) best = l;
     }
     return best;
@@ -292,6 +326,7 @@ function createMatchRegistry({
     switch (t.target.type) {
       case 'lobby': return `lobby:${t.target.lobbyId}`;
       case 'code': return `code:${t.target.code}`;
+      case 'follow': return `follow:${t.target.inviterUid}`;
       default: return `${t.target.type}:${t.wire}:${t.fp}`;
     }
   }
@@ -300,12 +335,30 @@ function createMatchRegistry({
     return !t.admitted && !t.failed;
   }
 
+  function isFollowing(t) {
+    return isWaiting(t) && t.target.type === 'follow';
+  }
+
+  // The live followers of user <uid> on (wire, fp), FIFO.
+  function followersOf(uid, wire, fp) {
+    const out = [];
+    for (const t of tickets.values()) {
+      if (isFollowing(t) && t.target.inviterUid === uid && t.wire === wire && t.fp === fp) out.push(t);
+    }
+    return out;
+  }
+
+  // The seats a quickplay player needs: theirs and their live followers', at most a whole lobby.
+  function seatsFor(uid, wire, fp) {
+    return Math.min(MAX_PLAYERS, 1 + followersOf(uid, wire, fp).length);
+  }
+
   // Tickets that count against server.lobby_queue_max: everyone waiting for room, but not a player waiting for a
   // lobby that is booting (a new private lobby's creator and its first joiners).
   function cappedCount() {
     let n = 0;
     for (const t of tickets.values()) {
-      if (!isWaiting(t)) continue;
+      if (!isWaiting(t) || t.target.type === 'follow') continue;
       const l = t.target.type === 'lobby' ? lobbies.get(t.target.lobbyId) : null;
       if (l && l.state === 'BOOTING') continue;
       n++;
@@ -332,12 +385,24 @@ function createMatchRegistry({
     return Math.round(base * (1 - POLL_JITTER + 2 * POLL_JITTER * random()));
   }
 
+  function followLeftSec(t) {
+    return Math.max(0, Math.ceil((t.createdAt + followWindowMs - now()) / 1000));
+  }
+
   function queuedView(t) {
     let position = 1;
     const key = poolKey(t);
     for (const o of tickets.values()) {
       if (o === t) break;
       if (isWaiting(o) && poolKey(o) === key) position++;
+    }
+    if (t.target.type === 'follow') {
+      // expires_in_sec and eta_sec: what is left of the window, which a poll does not extend (gap-fill).
+      const left = followLeftSec(t);
+      return {
+        ticket: t.id, kind: 'follow', position, eta_sec: left, poll_after_ms: jittered(POLL_MS), expires_in_sec: left,
+        message: `Waiting for ${t.target.inviterName} to start a match...`,
+      };
     }
     const l = t.target.type === 'lobby' ? lobbies.get(t.target.lobbyId) : null;
     const booting = !!l && l.state === 'BOOTING';
@@ -349,6 +414,9 @@ function createMatchRegistry({
     } else if (booting || t.target.type === 'create') {
       message = 'Starting a match server for you.';
       eta = 10;
+    } else if (l && t.target.waitForRoom && l.state === 'PREGAME' && !hasRoom(l)) {
+      message = 'That lobby is full. You will join when a seat opens.';
+      eta = 60;
     } else if (l) {
       message = 'That match is still running. You will join when it ends.';
       eta = 60;
@@ -363,20 +431,64 @@ function createMatchRegistry({
     };
   }
 
-  function fail(t, code) {
+  // opts: what the poll answers with the code ({message}), when not the registry's default.
+  function fail(t, code, opts = null) {
     t.failed = code;
+    t.failedOpts = opts;
     t.failedAt = now();
+  }
+
+  // The ticket's lobby is gone: its creator is told INTERNAL, a code joiner LOBBY_NOT_FOUND, and a player waiting on
+  // an invite that the match has ended.
+  function lobbyGone(t) {
+    if (t.target.host) fail(t, 'INTERNAL');
+    else fail(t, 'LOBBY_NOT_FOUND', t.target.invited ? { message: MATCH_ENDED } : null);
   }
 
   function admit(t, lobby) {
     const seat = reserve(lobby, t, ADMITTED_HOLD_MS);
     t.admitted = { lobbyId: lobby.id, seat };
     t.admittedAt = now();
+    followInto(lobby, t.uid);
   }
 
-  // Seats whoever can be seated, in FIFO order, and spawns what the queue needs. Call under the lock.
+  // A follow ticket becomes the lobby wait for <lobby>, kind lobby, waiting through a full PREGAME too.
+  function toLobbyWait(t, lobby) {
+    t.target = { type: 'lobby', lobbyId: lobby.id, host: false, waitForRoom: true, invited: true };
+    t.kind = 'lobby';
+  }
+
+  // User <uid> holds a seat in <lobby>: each live follower is seated there while it has room, FIFO; the rest wait for
+  // it (mid-match, full or booting). A follower on another protocol is told LOBBY_WRONG_VERSION. admit() brings a
+  // follower's own followers along, and every admit uses up a waiting ticket, so this always ends.
+  function followInto(lobby, uid) {
+    for (const t of tickets.values()) {
+      if (!isFollowing(t) || t.target.inviterUid !== uid) continue;
+      if (t.wire !== lobby.wire || t.fp !== lobby.fp) fail(t, 'LOBBY_WRONG_VERSION');
+      else if (lobby.state === 'PREGAME' && hasRoom(lobby)) admit(t, lobby);
+      else toLobbyWait(t, lobby);
+    }
+  }
+
+  // Every follow ticket: its inviter holds a seat (followInto), or its window has ended (FOLLOW_TIMEOUT), or it waits.
+  function resolveFollows() {
+    for (const t of tickets.values()) {
+      if (!isFollowing(t)) continue;
+      const l = seatLobby(t.target.inviterUid);
+      if (l) followInto(l, t.target.inviterUid);
+      else if (now() - t.createdAt >= followWindowMs) fail(t, 'FOLLOW_TIMEOUT');
+    }
+  }
+
+  // Seats whoever can be seated, in FIFO order, spawns what the queue needs, and settles the follow tickets. Call under
+  // the lock.
   async function drainLocked() {
     if (inGrace()) return;
+    await drainQueue();
+    resolveFollows();
+  }
+
+  async function drainQueue() {
     let entries = null;
     const readEntries = () => entries || (entries = manifest.read());
     let portsLeft = true;
@@ -391,12 +503,12 @@ function createMatchRegistry({
       }
       if (t.target.type === 'lobby') {
         const l = lobbies.get(t.target.lobbyId);
-        if (!l) { fail(t, t.target.host ? 'INTERNAL' : 'LOBBY_NOT_FOUND'); continue; }
+        if (!l) { lobbyGone(t); continue; }
         if (l.state !== 'PREGAME') continue;
         if (hasRoom(l)) admit(t, l);
-        else fail(t, 'LOBBY_FULL');
+        else if (!t.target.waitForRoom) fail(t, 'LOBBY_FULL');
       } else if (t.target.type === 'public') {
-        const l = bestPublicLobby(t.wire, t.fp);
+        const l = bestPublicLobby(t.wire, t.fp, seatsFor(t.uid, t.wire, t.fp));
         if (l) admit(t, l);
       } else if (t.target.type === 'create' && portsLeft) {
         const route = routeFor(readEntries(), t.wire, t.fp);
@@ -414,7 +526,7 @@ function createMatchRegistry({
     for (const t of tickets.values()) {
       if (isWaiting(t) && t.target.type === 'public') {
         const k = `${t.wire}:${t.fp}`;
-        need.set(k, (need.get(k) || 0) + 1);
+        need.set(k, (need.get(k) || 0) + seatsFor(t.uid, t.wire, t.fp));
       }
     }
     for (const l of lobbies.values()) {
@@ -473,11 +585,33 @@ function createMatchRegistry({
         if (l.state === 'PREGAME' && !ahead && !inGrace()) {
           if (!hasRoom(l)) return err('LOBBY_FULL');
           const seat = reserve(l, who, SEAT_RESERVATION_MS);
+          followInto(l, p.uid);
           return { result: 'ok', data: joinData(l, seat, { ...who, host: false }) };
         }
         if (l.state === 'PREGAME' && !hasRoom(l)) return err('LOBBY_FULL');
         if (l.state !== 'BOOTING' && queueFull()) return err('NO_CAPACITY');
         return { result: 'queued', queued: queuedView(enqueue({ ...who, target: { type: 'lobby', lobbyId: l.id, host: false } })) };
+      }
+
+      if (p.mode === 'join_user') {
+        const inviter = p.inviter;
+        if (!inviter || inviter.uid === p.uid) return err('VALIDATION', { message: "That's your own invite." });
+        const l = seatLobby(inviter.uid);
+        if (l) {
+          if (l.wire !== p.wire || l.fp !== p.fp) return err('LOBBY_WRONG_VERSION');
+          if (l.state === 'PREGAME' && waitingFor(l) === 0 && !inGrace() && hasRoom(l)) {
+            const seat = reserve(l, who, SEAT_RESERVATION_MS);
+            followInto(l, p.uid);
+            return { result: 'ok', data: joinData(l, seat, { ...who, host: false }) };
+          }
+          if (l.state !== 'BOOTING' && queueFull()) return err('NO_CAPACITY');
+          const target = { type: 'lobby', lobbyId: l.id, host: false, waitForRoom: true, invited: true };
+          return { result: 'queued', queued: queuedView(enqueue({ ...who, target })) };
+        }
+        // A follow can only end in a lobby of the caller's protocol, which must be one this box can run.
+        if (route.result !== 'ok') return err('SERVER_BEHIND');
+        const target = { type: 'follow', inviterUid: inviter.uid, inviterName: String(inviter.uname || 'your friend') };
+        return { result: 'queued', queued: queuedView(enqueue({ ...who, kind: 'follow', target })) };
       }
 
       if (route.result !== 'ok') return err('SERVER_BEHIND');
@@ -495,9 +629,10 @@ function createMatchRegistry({
       // quickplay
       const waiting = [...tickets.values()].some((t) => isWaiting(t) && t.target.type === 'public' && t.wire === p.wire && t.fp === p.fp);
       if (!inGrace() && !waiting) {
-        const l = bestPublicLobby(p.wire, p.fp);
+        const l = bestPublicLobby(p.wire, p.fp, seatsFor(p.uid, p.wire, p.fp));
         if (l) {
           const seat = reserve(l, who, SEAT_RESERVATION_MS);
+          followInto(l, p.uid);
           return { result: 'ok', data: joinData(l, seat, { ...who, host: false }) };
         }
       }
@@ -506,7 +641,7 @@ function createMatchRegistry({
       await drainLocked();
       if (t.failed) {
         tickets.delete(t.id);
-        return err(t.failed);
+        return err(t.failed, t.failedOpts || {});
       }
       return { result: 'queued', queued: queuedView(t) };
     });
@@ -519,9 +654,13 @@ function createMatchRegistry({
     if (!t) return null;
     if (t.install !== install) return err('QUEUE_TICKET_INVALID');
     t.lastPoll = now();
+    // The sweep (every second) settles follow tickets; a poll past the window need not wait for it.
+    if (isFollowing(t) && !inGrace() && now() - t.createdAt >= followWindowMs && !seatLobby(t.target.inviterUid)) {
+      fail(t, 'FOLLOW_TIMEOUT');
+    }
     if (t.failed) {
       tickets.delete(t.id);
-      return err(t.failed);
+      return err(t.failed, t.failedOpts || {});
     }
     if (t.admitted) {
       const l = lobbies.get(t.admitted.lobbyId);
@@ -732,9 +871,13 @@ function createMatchRegistry({
   }
 
   // A deleted account (RJ 473, DELETE /v1/me): its reserved seats and waiting tickets go. A seat it has taken stays;
-  // the match plays on, and the brain ignores its results for the gone account.
+  // the match plays on, and the brain ignores its results for the gone account. Its followers (RJ 458) learn that its
+  // invites are gone.
   function dropPlayer(uid) {
-    return locked(async () => releasePlayer(uid));
+    return locked(async () => {
+      releasePlayer(uid);
+      for (const t of tickets.values()) if (isFollowing(t) && t.target.inviterUid === uid) fail(t, 'INVITE_INVALID');
+    });
   }
 
   // Whether user <uid> holds a seat (reserved or taken) or a ticket: the guest cull (RJ 493) passes such a player by.
@@ -774,4 +917,5 @@ function createMatchRegistry({
 module.exports = {
   createMatchRegistry, brainUrlFor, MAX_PLAYERS, BOOT_GRACE_MS, HEARTBEAT_TIMEOUT_MS, EMPTY_LOBBY_MS, SEAT_RESERVATION_MS,
   ADMITTED_HOLD_MS, TICKET_TTL_MS, POLL_MS, BOOT_POLL_MS, LOBBY_ID_RE, CODE_RE, CRASH_LOOP_LIMIT, CRASH_COOLDOWN_MS,
+  FOLLOW_WINDOW_MS,
 };
