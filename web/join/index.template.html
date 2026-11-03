@@ -96,7 +96,8 @@ main {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: min(100%, 21rem);
+  width: max-content;
+  max-width: 100%;
   font-family: var(--display);
   font-size: clamp(30px, 10.5vw, 50px);
   line-height: 0.98;
@@ -112,8 +113,10 @@ main {
 }
 .logo-row { display: flex; align-items: center; gap: 0.16em; }
 .scan {
-  padding: 0 0.12em;
-  margin: 0 -0.12em;
+  /* The fill paints only inside this box, and the italic glyphs overhang their advance: a wide end pad keeps the last
+     letter whole. */
+  padding: 0 0.4em 0 0.12em;
+  margin: 0 -0.4em 0 -0.12em;
   color: transparent;
   background: repeating-linear-gradient(180deg, var(--accent-light) 0 3px, var(--accent-scan) 3px 5px);
   -webkit-background-clip: text;
@@ -129,9 +132,6 @@ main {
   padding: 0.06em 0;
 }
 .speed span { display: block; height: 0.065em; background: var(--accent-light); }
-.speed span:nth-child(1) { margin-left: 0.34em; }
-.speed span:nth-child(2) { margin-left: 0.2em; }
-.speed span:nth-child(3) { margin-left: 0.08em; }
 .headline {
   margin: 0 0 14px;
   text-align: center;
@@ -325,14 +325,19 @@ main {
         { text: 'Join the testers group', href: SITE.testers_group_url,
           how: 'On that page tap Join group at the top, beside the group’s name, or the “joining the group” link under “You don’t have permission to access this content”.' },
         { text: 'Become a tester', href: SITE.play_testing_url, how: 'Tap Become a tester.' },
-        { text: 'Install Rift Jumpers from Google Play', href: SITE.play_store_url },
+        { text: 'Install Rift Jumpers from Google Play', href: SITE.play_store_url,
+          how: 'Tap Install. If Play says the app isn’t available yet, wait a minute after step 2 and open this step again.' },
       ];
       v.warn = 'Use the same Google account for steps 1 and 2 as the Play Store on this phone.';
       v.again = 'Installed? Tap your invite link again.';
       return v;
     }
     if (SITE.ios.testflight_url) {
-      v.steps = [{ text: 'Install Rift Jumpers with TestFlight', href: SITE.ios.testflight_url }];
+      v.steps = [
+        { text: 'Get TestFlight from the App Store', href: 'https://apps.apple.com/app/testflight/id899247664',
+          how: 'Apple’s app for trying games before release. Skip this if you have it.' },
+        { text: 'Join the Rift Jumpers beta', href: SITE.ios.testflight_url, how: 'Tap Accept, then Install.' },
+      ];
       v.again = 'Installed? Tap your invite link again.';
     } else {
       v.lead = 'Rift Jumpers for iPhone is coming soon.';

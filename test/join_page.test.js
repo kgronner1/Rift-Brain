@@ -151,7 +151,8 @@ test('valid, iPhone: Open the game by the riftjumpers:// scheme; TestFlight when
   s.ios.testflight_url = 'https://testflight.apple.com/join/AbCdEf12';
   const { RJ: RJ2 } = await pageApi(s);
   const w = RJ2.view({ env: 'alpha', id: 'ab23cd45ef', platform: 'ios', lookup: 'valid', inviter: 'nova' });
-  assert.deepEqual(w.steps, [{ text: 'Install Rift Jumpers with TestFlight', href: 'https://testflight.apple.com/join/AbCdEf12' }]);
+  assert.deepEqual(w.steps.map((st) => st.href), ['https://apps.apple.com/app/testflight/id899247664', 'https://testflight.apple.com/join/AbCdEf12']);
+  assert.equal(w.steps[1].how, 'Tap Accept, then Install.');
   assert.equal(w.again, 'Installed? Tap your invite link again.');
 });
 
