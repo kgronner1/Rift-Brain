@@ -5,7 +5,9 @@
 //   index.html                              the page (index.template.html with the site's values, and a CSP whose
 //                                           hashes are the inline script's and style's)
 //   .well-known/assetlinks.json             each Android package with every known SHA-256 fingerprint
-//   .well-known/apple-app-site-association  Team ID + bundle id, every path; no details while either is unknown
+//   .well-known/apple-app-site-association  each iOS app with its own paths: the dev bundle /dev/* alone, the release
+//                                           bundle every path but /dev/*; an app is left out while its bundle id or
+//                                           the Team ID is unknown
 //   robots.txt                              nothing to index: every page is someone's invite
 //   assets/<file>                           every file of web/join/assets (the page's fonts), as it is
 //
@@ -76,7 +78,16 @@ export function checkSite(site) {
   }
   const ios = site.ios || {};
   if (known('ios.team_id', ios.team_id)) at('ios.team_id', typeof ios.team_id === 'string' && TEAM_ID_RE.test(ios.team_id), 'must be 10 upper-case letters and digits');
-  if (known('ios.bundle_id', ios.bundle_id)) at('ios.bundle_id', typeof ios.bundle_id === 'string' && BUNDLE_ID_RE.test(ios.bundle_id), 'must be a bundle id');
+  const bundles = [];
+  for (const env of ['alpha', 'dev']) {
+    const b = ios[env] && ios[env].bundle_id;
+    if (!ios[env] || !('bundle_id' in ios[env])) problems.push(`ios.${env}.bundle_id: missing (null while unknown)`);
+    else if (known(`ios.${env}.bundle_id`, b)) {
+      at(`ios.${env}.bundle_id`, typeof b === 'string' && BUNDLE_ID_RE.test(b), 'must be a bundle id');
+      bundles.push(b);
+    }
+  }
+  at('ios.dev.bundle_id', bundles.length < 2 || bundles[0] !== bundles[1], 'must not be the release bundle id: each app claims its own paths');
   if (known('ios.testflight_url', ios.testflight_url)) at('ios.testflight_url', isHttps(ios.testflight_url), 'must be an https URL');
   for (const k of ['testers_group_url', 'play_testing_url', 'play_store_url']) {
     if (known(k, site[k])) at(k, isHttps(site[k]), 'must be an https URL');
@@ -98,12 +109,26 @@ export function assetLinks(site) {
   return out;
 }
 
-// Every path is the app's (spec 5: "/* paths"); "paths" for iOS before 13, "components" after.
+// Each app claims only its own links, so with both installed a link has one taker (as the Android filters do,
+// Wobble Planet's InviteUrl.androidManifestContents()): the dev bundle /dev/* alone; the release bundle every path but
+// /dev/*, its exclude first (iOS takes the first rule that matches). "components" for iOS 13 on, "paths" ("NOT" for
+// the exclude) before it. An app whose bundle id is unknown, or every app while the Team ID is, is left out.
+export const IOS_PATHS = Object.freeze({
+  dev: Object.freeze({ paths: ['/dev/*'], components: [{ '/': '/dev/*' }] }),
+  alpha: Object.freeze({ paths: ['NOT /dev/*', '*'], components: [{ '/': '/dev/*', exclude: true }, { '/': '/*' }] }),
+});
+
 export function appleAppSiteAssociation(site) {
-  const { team_id: team, bundle_id: bundle } = site.ios;
-  if (!team || !bundle) return { applinks: { apps: [], details: [] } };
-  const appID = `${team}.${bundle}`;
-  return { applinks: { apps: [], details: [{ appID, appIDs: [appID], paths: ['*'], components: [{ '/': '/*' }] }] } };
+  const ios = site.ios || {};
+  const details = [];
+  for (const env of ['alpha', 'dev']) {
+    const bundle = ios[env] && ios[env].bundle_id;
+    if (!ios.team_id || !bundle) continue;
+    const appID = `${ios.team_id}.${bundle}`;
+    const { paths, components } = IOS_PATHS[env];
+    details.push({ appID, appIDs: [appID], paths: [...paths], components: components.map((c) => ({ ...c })) });
+  }
+  return { applinks: { apps: [], details } };
 }
 
 // The page: the template with what the script needs from site.json, and its Content-Security-Policy.

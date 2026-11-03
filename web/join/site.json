@@ -1,5 +1,5 @@
 {
-  "_about": "The invite link site (RJ 458). web/join/build.mjs makes index.html and both .well-known files from this file alone; ops/join/publish.sh publishes them. null is a value not known yet: the site leaves it out (no fingerprint, an empty iOS association, a coming-soon line) and the build lists it.",
+  "_about": "The invite link site (RJ 458). web/join/build.mjs makes index.html and both .well-known files from this file alone; ops/join/publish.sh publishes them. null is a value not known yet: the site leaves it out (no fingerprint, no iOS association for that app, a coming-soon line) and the build lists it.",
   "host": "join.riftjumpers.space",
   "api": {
     "alpha": "https://api.riftjumpers.space",
@@ -22,7 +22,12 @@
   },
   "ios": {
     "team_id": null,
-    "bundle_id": null,
+    "alpha": {
+      "bundle_id": null
+    },
+    "dev": {
+      "bundle_id": null
+    },
     "testflight_url": null
   },
   "testers_group_url": "https://groups.google.com/g/rift-jumpers-alpha",

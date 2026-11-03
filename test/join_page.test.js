@@ -57,12 +57,63 @@ test('site.json builds: both packages\' fingerprints, an empty iOS association u
     for (const fp of l.target.sha256_cert_fingerprints) assert.match(fp, /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
   }
   assert.deepEqual(JSON.parse(files[2].body), { applinks: { apps: [], details: [] } });
-  assert.deepEqual(unknown, ['android.alpha.sha256.upload', 'ios.team_id', 'ios.bundle_id', 'ios.testflight_url']);
-  const known = { ...site(), ios: { team_id: 'ABCDE12345', bundle_id: 'com.riftjumpers.game', testflight_url: null } };
-  assert.deepEqual(appleAppSiteAssociation(known).applinks.details, [
-    { appID: 'ABCDE12345.com.riftjumpers.game', appIDs: ['ABCDE12345.com.riftjumpers.game'], paths: ['*'], components: [{ '/': '/*' }] },
-  ]);
+  assert.deepEqual(unknown, ['android.alpha.sha256.upload', 'ios.team_id', 'ios.alpha.bundle_id', 'ios.dev.bundle_id', 'ios.testflight_url']);
   assert.equal(files[3].body, 'User-agent: *\nDisallow: /\n');
+});
+
+// Apple's matching for one app's details (iOS 13 "components", path rules only): the first rule whose pattern matches
+// decides, and an exclude rule means "not this app". * matches any run of characters, ? one.
+function claims(detail, urlPath) {
+  for (const c of detail.components) {
+    const re = new RegExp(`^${c['/'].replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
+    if (re.test(urlPath)) return !c.exclude;
+  }
+  return false;
+}
+
+test('apple-app-site-association: each iOS app claims only its own links -- dev /dev/*, release everything else', async () => {
+  const { appleAppSiteAssociation, buildSite } = await build();
+  const known = site();
+  known.ios = { team_id: 'ABCDE12345', alpha: { bundle_id: 'com.riftjumpers.game' }, dev: { bundle_id: 'com.riftjumpers.game.dev' }, testflight_url: null };
+  const { details } = appleAppSiteAssociation(known).applinks;
+  assert.deepEqual(details, [
+    {
+      appID: 'ABCDE12345.com.riftjumpers.game', appIDs: ['ABCDE12345.com.riftjumpers.game'],
+      paths: ['NOT /dev/*', '*'], components: [{ '/': '/dev/*', exclude: true }, { '/': '/*' }],
+    },
+    {
+      appID: 'ABCDE12345.com.riftjumpers.game.dev', appIDs: ['ABCDE12345.com.riftjumpers.game.dev'],
+      paths: ['/dev/*'], components: [{ '/': '/dev/*' }],
+    },
+  ]);
+  const [release, dev] = details;
+  for (const p of ['/ab23cd45ef', '/AB23CD45EF', '/ab23cd45ef/']) {
+    assert.deepEqual([claims(release, p), claims(dev, p)], [true, false], `${p}: the release app's alone`);
+  }
+  for (const p of ['/dev/ab23cd45ef', '/dev/ab23cd45ef/']) {
+    assert.deepEqual([claims(release, p), claims(dev, p)], [false, true], `${p}: the dev app's alone`);
+  }
+  // The exclude must come first: Apple stops at the first rule that matches.
+  assert.equal(release.components[0].exclude, true);
+  // The rules hold in the built file as written.
+  const aasa = JSON.parse(buildSite(known).files.find((f) => f.key === '.well-known/apple-app-site-association').body);
+  assert.deepEqual(aasa.applinks.details, details);
+
+  // One app known: only it is listed; no Team ID: none.
+  const one = site();
+  one.ios = { team_id: 'ABCDE12345', alpha: { bundle_id: null }, dev: { bundle_id: 'com.riftjumpers.game.dev' }, testflight_url: null };
+  assert.deepEqual(appleAppSiteAssociation(one).applinks.details.map((d) => d.appID), ['ABCDE12345.com.riftjumpers.game.dev']);
+  const noTeam = site();
+  noTeam.ios = { ...known.ios, team_id: null };
+  assert.deepEqual(appleAppSiteAssociation(noTeam).applinks.details, []);
+  // The same bundle id for both would claim every link in one app.
+  const same = site();
+  same.ios = { team_id: 'ABCDE12345', alpha: { bundle_id: 'com.riftjumpers.game' }, dev: { bundle_id: 'com.riftjumpers.game' }, testflight_url: null };
+  assert.throws(() => buildSite(same), /ios\.dev\.bundle_id: must not be the release bundle id/);
+  // The old single bundle_id is refused, not silently read as no app.
+  const old = site();
+  old.ios = { team_id: 'ABCDE12345', bundle_id: 'com.riftjumpers.game', testflight_url: null };
+  assert.throws(() => buildSite(old), /ios\.alpha\.bundle_id: missing/);
 });
 
 test('a malformed value stops the build, naming it', async () => {

@@ -478,10 +478,12 @@ who sent it (`GET /v1/invites/:id`, README "Invite links (RJ 458)"), and shows t
   `bash infra/deploy_stacks.sh --edge-only` (plan), `--changeset`, then `--apply`. The certificate's DNS validation
   and the distribution take 5-20 minutes, as config's did.
 - **The source.** `web/join/site.json` holds every value the site needs, and `null` for one not known yet (today: the
-  iOS Team ID and bundle id, the TestFlight public link, and the optional upload key). `web/join/build.mjs` makes the
-  page (`index.template.html`, with a CSP of its inline script's and style's hashes), `.well-known/assetlinks.json`
-  (each package with every known SHA-256), `.well-known/apple-app-site-association` (empty while the iOS values are
-  null), `robots.txt` (nothing to index) and `assets/` (the fonts). A null is left out and listed; a malformed value
+  iOS Team ID and both bundle ids, the TestFlight public link, and the optional upload key). `web/join/build.mjs` makes
+  the page (`index.template.html`, with a CSP of its inline script's and style's hashes), `.well-known/assetlinks.json`
+  (each package with every known SHA-256), `.well-known/apple-app-site-association` (each iOS app with its own paths:
+  the dev bundle `/dev/*` only, the release bundle every path but `/dev/*`, so with both installed a link has one
+  taker; an app is left out while its bundle id or the Team ID is null), `robots.txt` (nothing to index) and `assets/`
+  (the fonts). A null is left out and listed; a malformed value
   stops the build. The page is styled after riftjumpers.space (its `src/styles/rift.css`) and serves its own fonts.
 - **Publishing.** `bash ops/join/publish.sh --dry-run` builds it and prints every file with its type and the
   commands; `bash ops/join/publish.sh` uploads each file with `put-object` and that type (both `.well-known` files as
