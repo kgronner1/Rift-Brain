@@ -587,8 +587,12 @@ contract is Wobble Planet `specs/invite-links.md`, section 2 (additive to spec s
   told `LOBBY_FULL`). No seat: `queued`, kind **`follow`**, message `Waiting for <name> to start a match...`,
   `expires_in_sec` the window left (600 s; a poll does not extend it). "Holds a seat" is the inviter's reservation if
   they hold one, else a seat they took.
-- **A follow** is polled at `GET /v1/queue/:ticket` and cancelled with `DELETE`, like any lobby ticket, and dropped
-  after 60 s unpolled (a follower who stops polling is not live). The moment the inviter holds a seat, the brain
+- **A follow** is polled at `GET /v1/queue/:ticket` and cancelled with `DELETE`, like any lobby ticket, but dropped
+  only after a whole window unpolled, not 60 s: a phone stops polling in the background, and a friend who goes to
+  Messages to say "I'm in" must still be following on their way back. So is the lobby wait a follow starts as or
+  turns into (`expires_in_sec` says so). Seated while away, a follower's 15 s admitted hold lapses and is taken again
+  at the next sweep while the lobby has room (else the lobby wait), so the first poll back collects a seat in the
+  inviter's lobby. The moment the inviter holds a seat, the brain
   reserves seats there for the live followers while it has room (FIFO), and their next poll answers ok; the rest turn
   into the lobby wait for that lobby; a follower on another protocol gets `LOBBY_WRONG_VERSION`. A follower's own
   followers come along. A window that ends seatless: `FOLLOW_TIMEOUT`. An inviter's deleted account: its followers get

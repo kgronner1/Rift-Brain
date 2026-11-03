@@ -295,25 +295,147 @@ test('follow timeout: no seat in the window -> FOLLOW_TIMEOUT at the poll, or at
   assert.equal(s.lobby.seats.size, 1);
 });
 
-test('only live followers come along: one who stopped polling is dropped after 60 s and takes no seat', async () => {
+test('only live followers come along: one nobody polls for a whole window is dropped and takes no seat', async () => {
+  const m = makeRegistry({ followWindowMs: 120 * 1000 });
+  const someone = player();
+  const { lobby } = await seatByQuickplay(m, someone);
+  const a = player();
+  const gone = follower(a);
+  const qg = await m.reg.join(gone);
+  // It outlives a lobby ticket's 60 s unpolled.
+  m.advance(TICKET_TTL_MS + 1);
+  await m.reg.heartbeat(lobby.id, beat(lobby, 'PREGAME'));
+  await m.reg.sweep();
+  assert.ok(m.reg.tickets.has(qg.queued.ticket), 'an invite ticket is not dropped after 60 s unpolled');
+  const live = follower(a);
+  const ql = await m.reg.join(live);
+  m.advance(30 * 1000);
+  m.reg.poll(ql.queued.ticket, live.install);
+  await m.reg.heartbeat(lobby.id, beat(lobby, 'PREGAME'));
+  m.advance(30 * 1000);
+  await m.reg.heartbeat(lobby.id, beat(lobby, 'PREGAME'));
+  await m.reg.sweep();
+  assert.equal(m.reg.poll(qg.queued.ticket, gone.install), null, 'unpolled for the whole window: dropped');
+  assert.equal((await m.reg.join(a)).result, 'ok');
+  assert.equal(m.reg.poll(ql.queued.ticket, live.install).result, 'ok');
+  assert.equal(lobby.seats.size, 3, 'someone, a and the live follower');
+});
+
+test('a follower in the background: kept with no poll for most of the window, its poll still answers', async () => {
+  const m = makeRegistry();
+  const a = player();
+  const b = follower(a);
+  const q = await m.reg.join(b);
+  assert.equal(q.queued.expires_in_sec, 600);
+  // Ten minutes in Messages, swept every 5 s: no poll at all.
+  for (let t = 0; t < FOLLOW_WINDOW_MS - 5000; t += 5000) {
+    m.advance(5000);
+    await m.reg.sweep();
+  }
+  assert.ok(m.reg.tickets.has(q.queued.ticket), 'still following');
+  const p = m.reg.poll(q.queued.ticket, b.install);
+  assert.deepEqual([p.result, p.queued.kind, p.queued.expires_in_sec], ['queued', 'follow', 5]);
+  // Past the window with the inviter still in no lobby: the next poll is told so, not QUEUE_TICKET_INVALID.
+  m.advance(30 * 1000);
+  await m.reg.sweep();
+  assert.equal(m.reg.poll(q.queued.ticket, b.install).code, 'FOLLOW_TIMEOUT');
+});
+
+test('the inviter is seated while the follower is in the background: the seat is held again each sweep, collected on the first poll back', async () => {
   const m = makeRegistry();
   const someone = player();
   const { lobby } = await seatByQuickplay(m, someone);
   const a = player();
-  const live = follower(a);
-  const gone = follower(a);
-  const ql = await m.reg.join(live);
-  const qg = await m.reg.join(gone);
-  m.advance(TICKET_TTL_MS / 2);
-  m.reg.poll(ql.queued.ticket, live.install);
-  await report(m, lobby, 'PREGAME');
-  m.advance(TICKET_TTL_MS / 2 + 1);
-  await report(m, lobby, 'PREGAME');
+  const b = follower(a);
+  const q = await m.reg.join(b);
+  m.reg.poll(q.queued.ticket, b.install);
+  // b goes to Messages; a quickplays into the lobby and takes the seat.
+  const ra = await m.reg.join(a);
+  assert.equal(ra.result, 'ok');
+  const ta = tokenOf(ra.data, m.clock.t);
+  assert.equal(m.reg.playerJoined(lobby.id, { user_id: a.uid, seat: ta.seat }).result, 'ok');
+  assert.equal(lobby.seats.size, 3, 'someone, a, and b\'s admitted hold');
+  // Ninety seconds away, swept every second: the 15 s hold lapses again and again and is taken again each time.
+  for (let i = 0; i < 90; i++) {
+    m.advance(1000);
+    if (i % 10 === 0) await m.reg.heartbeat(lobby.id, beat(lobby, 'PREGAME'));
+    await m.reg.sweep();
+    assert.ok(lobby.seats.size <= 3, `never two holds for b (${i + 1} s)`);
+  }
+  assert.ok(m.reg.tickets.has(q.queued.ticket), 'b is still following');
+  const p = m.reg.poll(q.queued.ticket, b.install);
+  assert.equal(p.result, 'ok', JSON.stringify(p));
+  assert.equal(tokenOf(p.data, m.clock.t).lobby, lobby.id, 'in the inviter\'s lobby');
+});
+
+test('the inviter\'s lobby fills while the follower is in the background: the follow waits for room there, then the seat', async () => {
+  const m = makeRegistry();
+  const someone = player();
+  const { lobby, token: ts } = await seatByQuickplay(m, someone);
+  const a = player();
+  const b = follower(a);
+  const q = await m.reg.join(b);
+  const ra = await m.reg.join(a);
+  const ta = tokenOf(ra.data, m.clock.t);
+  m.reg.playerJoined(lobby.id, { user_id: a.uid, seat: ta.seat });
+  // b is away; two bots take the last seats while b's 15 s hold is lapsing.
+  const seated = [{ user_id: someone.uid, seat: ts.seat }, { user_id: a.uid, seat: ta.seat }];
+  m.advance(ADMITTED_HOLD_MS + 1);
+  await m.reg.heartbeat(lobby.id, beat(lobby, 'PREGAME', { players: seated, bots: 2 }));
+  for (let i = 0; i < 60; i += 5) {
+    m.advance(5000);
+    await m.reg.heartbeat(lobby.id, beat(lobby, 'PREGAME', { players: seated, bots: 2 }));
+    await m.reg.sweep();
+  }
+  assert.ok(m.reg.tickets.has(q.queued.ticket), 'still waiting, not dropped and not failed');
+  const p = m.reg.poll(q.queued.ticket, b.install);
+  assert.deepEqual([p.result, p.queued.kind, p.queued.message], ['queued', 'lobby', 'That lobby is full. You will join when a seat opens.']);
+  // A bot leaves while b is away again: the seat is held for b, and its first poll back collects it.
+  await m.reg.heartbeat(lobby.id, beat(lobby, 'PREGAME', { players: seated, bots: 1 }));
+  m.advance(70 * 1000);
+  await m.reg.heartbeat(lobby.id, beat(lobby, 'PREGAME', { players: seated, bots: 1 }));
   await m.reg.sweep();
-  assert.equal(m.reg.poll(qg.queued.ticket, gone.install), null, 'the unpolled follow ticket is dropped');
-  assert.equal((await m.reg.join(a)).result, 'ok');
-  assert.equal(m.reg.poll(ql.queued.ticket, live.install).result, 'ok');
-  assert.equal(lobby.seats.size, 3, 'someone, a and the live follower');
+  const ok = m.reg.poll(q.queued.ticket, b.install);
+  assert.equal(ok.result, 'ok', JSON.stringify(ok));
+  assert.equal(tokenOf(ok.data, m.clock.t).lobby, lobby.id);
+});
+
+test('the inviter\'s match starts while the follower is in the background: the lobby wait, kept unpolled, then the next PREGAME', async () => {
+  const m = makeRegistry();
+  const someone = player();
+  const { lobby, token: ts } = await seatByQuickplay(m, someone);
+  const a = player();
+  const b = follower(a);
+  const q = await m.reg.join(b);
+  const ra = await m.reg.join(a);
+  const ta = tokenOf(ra.data, m.clock.t);
+  m.reg.playerJoined(lobby.id, { user_id: a.uid, seat: ta.seat });
+  const seated = [{ user_id: someone.uid, seat: ts.seat }, { user_id: a.uid, seat: ta.seat }];
+  await m.reg.heartbeat(lobby.id, beat(lobby, 'INGAME', { players: seated }));
+  // Four minutes of match with b away: the hold lapses, the follow turns into the lobby wait, which is kept.
+  for (let i = 0; i < 240; i += 5) {
+    m.advance(5000);
+    if (i % 20 === 0) await m.reg.heartbeat(lobby.id, beat(lobby, 'INGAME', { players: seated }));
+    await m.reg.sweep();
+  }
+  assert.ok(m.reg.tickets.has(q.queued.ticket), 'an invite\'s lobby wait outlives 60 s unpolled');
+  const p = m.reg.poll(q.queued.ticket, b.install);
+  assert.deepEqual([p.result, p.queued.kind, p.queued.message, p.queued.expires_in_sec],
+    ['queued', 'lobby', 'That match is still running. You will join when it ends.', 600]);
+  // Away again until the match is over: seated at the next PREGAME, and the first poll back collects it.
+  for (const state of ['INGAME', 'INGAME', 'POSTGAME', 'PREGAME']) {
+    m.advance(30 * 1000);
+    await m.reg.heartbeat(lobby.id, beat(lobby, state, { players: seated }));
+    await m.reg.sweep();
+  }
+  for (let i = 0; i < 40; i++) {
+    m.advance(1000);
+    if (i % 10 === 0) await m.reg.heartbeat(lobby.id, beat(lobby, 'PREGAME', { players: seated }));
+    await m.reg.sweep();
+  }
+  const ok = m.reg.poll(q.queued.ticket, b.install);
+  assert.equal(ok.result, 'ok', JSON.stringify(ok));
+  assert.equal(tokenOf(ok.data, m.clock.t).lobby, lobby.id);
 });
 
 test('an admitted follower who does not collect within the hold loses the seat and follows again', async () => {

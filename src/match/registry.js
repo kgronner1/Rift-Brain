@@ -11,11 +11,15 @@
 // - Seated in a lobby of the caller's (wire, fp) in PREGAME with room: a seat, as join_private gives. Mid-match, full,
 //   or booting: the lobby wait, which for an invite (gap-fill) waits while the lobby is full in PREGAME too, rather
 //   than failing LOBBY_FULL as a code join's does (spec 1 and 2.3: "full" means the next seat or the next PREGAME).
-// - No seat: a follow ticket, for followWindowMs (600 s; FOLLOW_WINDOW_SEC). It is polled and dropped like a lobby
-//   ticket (60 s unpolled: a follower who stops polling is no longer live). The moment the inviter holds a seat its
+// - No seat: a follow ticket, for followWindowMs (600 s; FOLLOW_WINDOW_SEC). The moment the inviter holds a seat its
 //   live followers are seated there while it has room, FIFO, and the rest turn into the lobby wait above; a follower
 //   on another protocol is told LOBBY_WRONG_VERSION. Followers of a follower come along the same way. A window that
 //   ends with no seat answers FOLLOW_TIMEOUT. An inviter's deleted account fails its followers with INVITE_INVALID.
+// - Every ticket from an invite (a follow, and the lobby wait it starts as or turns into) is dropped unpolled only
+//   after a whole window, not a lobby ticket's 60 s: a phone stops polling in the background, and a friend who goes to
+//   Messages to say "I'm in" must still be following when they come back. Seated meanwhile, a follower's admitted
+//   hold (15 s) lapses and is taken again at the next sweep while the lobby has room (else the lobby wait), so their
+//   first poll back collects a seat there.
 // - Quickplay counts a player's live followers on their protocol: it places them only in a public lobby with room for
 //   1 + followers (at most a whole lobby), and spawns for them as for that many players.
 // - Follow tickets wait on a person, not on capacity: they do not count against server.lobby_queue_max.
@@ -50,7 +54,8 @@ const ADMITTED_HOLD_MS = 15 * 1000;
 const FOLLOW_WINDOW_MS = 600 * 1000;
 // What a player waiting on an invite reads when their lobby wait cannot go on.
 const MATCH_ENDED = 'That match has ended. Tap the invite again to follow your friend.';
-// A ticket nobody polls for this long is dropped (and `expires_in_sec` says so).
+// A ticket nobody polls for this long is dropped (and `expires_in_sec` says so); a ticket from an invite, a follow
+// window (ttlOf()).
 const TICKET_TTL_MS = 60 * 1000;
 const POLL_MS = 3000;
 const BOOT_POLL_MS = 1000;
@@ -385,6 +390,11 @@ function createMatchRegistry({
     return Math.round(base * (1 - POLL_JITTER + 2 * POLL_JITTER * random()));
   }
 
+  // How long ticket <t> lives unpolled: a follow window for one from an invite (join_user), else TICKET_TTL_MS.
+  function ttlOf(t) {
+    return t.target.type === 'follow' || t.target.invited ? followWindowMs : TICKET_TTL_MS;
+  }
+
   function followLeftSec(t) {
     return Math.max(0, Math.ceil((t.createdAt + followWindowMs - now()) / 1000));
   }
@@ -427,7 +437,7 @@ function createMatchRegistry({
     return {
       ticket: t.id, kind: t.kind, position, eta_sec: eta,
       poll_after_ms: jittered(booting || inGrace() ? BOOT_POLL_MS : POLL_MS),
-      expires_in_sec: Math.round(TICKET_TTL_MS / 1000), message,
+      expires_in_sec: Math.round(ttlOf(t) / 1000), message,
     };
   }
 
@@ -850,7 +860,7 @@ function createMatchRegistry({
     }
 
     for (const [id, tk] of tickets) {
-      const lost = t - tk.lastPoll > TICKET_TTL_MS;
+      const lost = t - tk.lastPoll > ttlOf(tk);
       if (tk.admitted) {
         const l = lobbies.get(tk.admitted.lobbyId);
         if (!l || !l.seats.has(tk.admitted.seat)) tk.admitted = null;
