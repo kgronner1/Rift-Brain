@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="dark">
+<!--@CSP@-->
+<title>Rift Jumpers invite</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #04050d;
+  --panel: #0b0f22;
+  --line: #1d2a52;
+  --text: #e8ecff;
+  --dim: #9aa6d1;
+  --glow: #5ef2ff;
+  --glow-ink: #021418;
+  --warn: #ffcf5e;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  min-height: 100vh;
+  background: radial-gradient(ellipse at 50% -10%, #12204a 0%, var(--bg) 60%) fixed, var(--bg);
+  color: var(--text);
+  font: 17px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+main {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: max(28px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.brand {
+  letter-spacing: 0.32em;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--glow);
+  text-shadow: 0 0 12px rgba(94, 242, 255, 0.55);
+  margin: 0 0 28px;
+}
+h1 { font-size: 26px; line-height: 1.25; margin: 0 0 12px; overflow-wrap: anywhere; }
+.lead { color: var(--dim); margin: 0 0 24px; }
+.button {
+  display: block;
+  text-align: center;
+  padding: 15px 18px;
+  border-radius: 12px;
+  background: var(--glow);
+  color: var(--glow-ink);
+  font-weight: 700;
+  font-size: 18px;
+  text-decoration: none;
+  box-shadow: 0 0 22px rgba(94, 242, 255, 0.35);
+  margin: 0 0 28px;
+}
+.button:active { transform: translateY(1px); }
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 18px 6px;
+  margin: 0 0 20px;
+}
+.panel h2 { font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin: 0 0 12px; }
+ol { margin: 0; padding: 0 0 0 1.3em; }
+li { margin: 0 0 14px; padding-left: 0.2em; }
+li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
+.how { display: block; color: var(--dim); font-size: 15px; margin-top: 2px; }
+.warn {
+  border-left: 3px solid var(--warn);
+  padding: 4px 0 4px 12px;
+  margin: 0 0 20px;
+  color: var(--text);
+  font-size: 15px;
+}
+.again { font-weight: 600; margin: 0 0 20px; }
+.note { color: var(--dim); font-size: 15px; margin: 0 0 20px; }
+.foot { color: #56608a; font-size: 13px; margin-top: 36px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <p class="brand">RIFT JUMPERS</p>
+  <h1 id="title">Checking your invite...</h1>
+  <p class="lead" id="lead" hidden></p>
+  <div id="body"></div>
+  <p class="foot">Rift Jumpers is in alpha testing.</p>
+</main>
+<script>
+(function () {
+  'use strict';
+  var SITE = /*@SITE@*/null;
+  var ID_RE = /^[23456789abcdefghjkmnpqrstuvwxyz]{10}$/;
+  var LOOKUP_TIMEOUT_MS = 8000;
+
+  // "/<id>" is an alpha invite, "/dev/<id>" a dev one; anything else has no id.
+  function parsePath(pathname) {
+    var parts = String(pathname || '/').split('/').filter(function (p) { return p !== ''; });
+    var env = 'alpha';
+    if (parts[0] === 'dev') {
+      env = 'dev';
+      parts.shift();
+    }
+    var id = null;
+    if (parts.length === 1) {
+      var raw = parts[0];
+      try { raw = decodeURIComponent(raw); } catch (e) { raw = ''; }
+      raw = raw.trim().toLowerCase();
+      if (ID_RE.test(raw)) id = raw;
+    }
+    return { env: env, id: id };
+  }
+
+  function platformOf(ua, maxTouchPoints) {
+    ua = String(ua || '');
+    if (/Android/i.test(ua)) return 'android';
+    if (/iPhone|iPad|iPod/i.test(ua)) return 'ios';
+    // iPadOS asks for the desktop site: a Mac that takes touches is an iPad.
+    if (/Macintosh/i.test(ua) && Number(maxTouchPoints) > 1) return 'ios';
+    return 'desktop';
+  }
+
+  function invitePath(env, id) {
+    return (env === 'dev' ? '/dev/' : '/') + id;
+  }
+
+  // For in-app browsers that keep links to themselves: Chrome's intent URL for the right package. Without the app it
+  // comes back to this page, #install.
+  function intentUrl(env, id) {
+    var path = invitePath(env, id);
+    var back = 'https://' + SITE.host + path + '#install';
+    return 'intent://' + SITE.host + path + '#Intent;scheme=https;package=' + SITE.android[env].package
+      + ';S.browser_fallback_url=' + encodeURIComponent(back) + ';end';
+  }
+
+  // What the page says, from what is known: {title, lead?, open?, steps?, warn?, again?, notes: []}. Pure.
+  // state: {env, id, platform, lookup: 'valid' | 'invalid' | 'error', inviter, installHint}
+  function view(state) {
+    var v = { notes: [] };
+    if (!state.id || state.lookup === 'invalid') {
+      v.title = 'This invite has expired; ask your friend for a new one.';
+      return v;
+    }
+    v.title = state.lookup === 'valid' && state.inviter
+      ? state.inviter + ' invited you to play Rift Jumpers'
+      : "You've been invited to play Rift Jumpers";
+    if (state.lookup === 'error') v.notes.push("We couldn't check this invite just now. It may still work: open it in the game.");
+    if (state.platform === 'desktop') {
+      v.lead = 'Open this link on your phone.';
+      return v;
+    }
+    if (state.platform === 'android') {
+      v.open = intentUrl(state.env, state.id);
+      if (state.installHint) v.notes.push("The game isn't on this phone yet.");
+    }
+    if (state.env === 'dev') {
+      if (state.platform === 'ios') v.lead = 'This is a dev invite: open it on an Android phone with RJ Dev installed.';
+      return v;
+    }
+    if (state.platform === 'android') {
+      v.steps = [
+        { text: 'Join the testers group', href: SITE.testers_group_url,
+          how: 'On that page tap Join group at the top, beside the group’s name, or the “joining the group” link under “You don’t have permission to access this content”.' },
+        { text: 'Become a tester', href: SITE.play_testing_url, how: 'Tap Become a tester.' },
+        { text: 'Install Rift Jumpers from Google Play', href: SITE.play_store_url },
+      ];
+      v.warn = 'Use the same Google account for steps 1 and 2 as the Play Store on this phone.';
+      v.again = 'Installed? Tap your invite link again.';
+      return v;
+    }
+    if (SITE.ios.testflight_url) {
+      v.steps = [{ text: 'Install Rift Jumpers with TestFlight', href: SITE.ios.testflight_url }];
+      v.again = 'Installed? Tap your invite link again.';
+    } else {
+      v.lead = 'Rift Jumpers for iPhone is coming soon.';
+    }
+    return v;
+  }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+
+  function render(v) {
+    document.getElementById('title').textContent = v.title;
+    var lead = document.getElementById('lead');
+    lead.textContent = v.lead || '';
+    lead.hidden = !v.lead;
+    var body = document.getElementById('body');
+    while (body.firstChild) body.removeChild(body.firstChild);
+    for (var i = 0; i < v.notes.length; i++) body.appendChild(el('p', 'note', v.notes[i]));
+    if (v.open) {
+      var a = el('a', 'button', 'Open the game');
+      a.href = v.open;
+      body.appendChild(a);
+    }
+    if (v.steps) {
+      var panel = el('section', 'panel');
+      panel.appendChild(el('h2', null, v.open ? 'Not installed yet?' : 'Get the game'));
+      var ol = el('ol');
+      for (var j = 0; j < v.steps.length; j++) {
+        var s = v.steps[j];
+        var li = el('li');
+        var link = el('a', null, s.text);
+        link.href = s.href;
+        link.rel = 'noopener noreferrer';
+        li.appendChild(link);
+        if (s.how) li.appendChild(el('span', 'how', s.how));
+        ol.appendChild(li);
+      }
+      panel.appendChild(ol);
+      body.appendChild(panel);
+    }
+    if (v.warn) body.appendChild(el('p', 'warn', v.warn));
+    if (v.again) body.appendChild(el('p', 'again', v.again));
+    document.title = v.title;
+  }
+
+  // {lookup, inviter} from GET /v1/invites/:id (Rift-Brain): no headers, no credentials.
+  function lookup(env, id, done) {
+    var finished = false;
+    var finish = function (r) { if (!finished) { finished = true; done(r); } };
+    var ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    setTimeout(function () { if (ctl) ctl.abort(); finish({ lookup: 'error' }); }, LOOKUP_TIMEOUT_MS);
+    fetch(SITE.api[env] + '/v1/invites/' + id, { method: 'GET', credentials: 'omit', cache: 'no-store', signal: ctl ? ctl.signal : undefined })
+      .then(function (res) { return res.json(); })
+      .then(function (b) {
+        if (!b || b.result !== 'ok' || !b.data) return finish({ lookup: 'error' });
+        if (b.data.valid !== true) return finish({ lookup: 'invalid' });
+        var name = b.data.inviter && typeof b.data.inviter.username === 'string' ? b.data.inviter.username : '';
+        finish({ lookup: 'valid', inviter: name.slice(0, 64) });
+      })
+      .catch(function () { finish({ lookup: 'error' }); });
+  }
+
+  var api = { parsePath: parsePath, platformOf: platformOf, intentUrl: intentUrl, view: view };
+  if (typeof document === 'undefined') {
+    this.RJJoin = api;
+    return;
+  }
+  var where = parsePath(location.pathname);
+  var state = {
+    env: where.env, id: where.id, platform: platformOf(navigator.userAgent, navigator.maxTouchPoints),
+    installHint: location.hash === '#install',
+  };
+  if (!where.id) {
+    state.lookup = 'invalid';
+    render(view(state));
+    return;
+  }
+  lookup(where.env, where.id, function (r) {
+    state.lookup = r.lookup;
+    state.inviter = r.inviter;
+    render(view(state));
+  });
+}).call(this);
+</script>
+</body>
+</html>
