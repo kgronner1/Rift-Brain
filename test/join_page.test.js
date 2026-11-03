@@ -42,7 +42,13 @@ test('site.json builds: both packages\' fingerprints, an empty iOS association u
     ['.well-known/assetlinks.json', 'application/json'],
     ['.well-known/apple-app-site-association', 'application/json'],
     ['robots.txt', 'text/plain; charset=utf-8'],
+    ['assets/akira-expanded.otf', 'font/otf'],
+    ['assets/michroma-regular.ttf', 'font/ttf'],
   ]);
+  for (const f of files.slice(4)) {
+    assert.ok(Buffer.isBuffer(f.body) && f.body.length > 10000, f.key);
+    assert.ok(files[0].body.includes(`url('/${f.key}')`), `the page uses ${f.key}`);
+  }
   const links = JSON.parse(files[1].body);
   assert.deepEqual(links.map((l) => l.target.package_name), ['com.riftjumpers.game', 'com.riftjumpers.game.dev']);
   for (const l of links) {
@@ -82,6 +88,8 @@ test('the page: its CSP allows exactly its inline script and style, and the two 
   assert.ok(csp.includes(`script-src 'sha256-${h(script)}'`));
   assert.ok(csp.includes(`style-src 'sha256-${h(style)}'`));
   assert.ok(csp.includes('connect-src https://api.riftjumpers.space https://api-dev.riftjumpers.space'));
+  assert.ok(csp.includes("font-src 'self'"), 'the fonts are bundled, nothing is fetched from a font host');
+  assert.doesNotMatch(html, /googleapis|gstatic/);
   assert.ok(html.includes(`<meta http-equiv="Content-Security-Policy" content="${csp}">`));
   assert.ok(html.includes('<meta name="referrer" content="no-referrer">'), 'the invite in the path never leaves as a Referer');
   const evil = site();
@@ -128,12 +136,13 @@ test('valid, Android: the name, Open the game for the release package, the four 
   assert.doesNotMatch(text(v), /TestFlight|iPhone for|coming soon/, 'no iPhone steps on Android');
 });
 
-test('valid, iPhone: TestFlight when known, else coming soon; no Android steps; the switch back', async () => {
+test('valid, iPhone: Open the game by the riftjumpers:// scheme; TestFlight when known, else coming soon; no Android steps; the switch back', async () => {
   const { RJ } = await pageApi();
   const v = RJ.view({ env: 'alpha', id: 'ab23cd45ef', platform: 'ios', lookup: 'valid', inviter: 'nova' });
   assert.equal(v.title, 'nova invited you to play Rift Jumpers');
+  assert.equal(v.name, 'nova');
   assert.equal(v.lead, 'Rift Jumpers for iPhone is coming soon.');
-  assert.equal(v.open, undefined);
+  assert.equal(v.open, 'riftjumpers://join/ab23cd45ef');
   assert.equal(v.steps, undefined);
   assert.deepEqual(v.switches, [{ platform: 'android', label: 'On Android instead?' }]);
   assert.doesNotMatch(text(v), /Google|Play|groups/, 'no Android steps on an iPhone');
@@ -155,6 +164,8 @@ test('desktop, dev links, an expired invite, and a lookup that failed', async ()
   const dev = RJ.view({ env: 'dev', id: 'ab23cd45ef', platform: 'android', lookup: 'valid', inviter: 'vega' });
   assert.match(dev.open, /^intent:\/\/join\.riftjumpers\.space\/dev\/ab23cd45ef#Intent;scheme=https;package=com\.riftjumpers\.game\.dev;/);
   assert.equal(dev.steps, undefined, 'dev builds come from the Drive folder: no sign-up steps');
+  const devIos = RJ.view({ env: 'dev', id: 'ab23cd45ef', platform: 'ios', lookup: 'valid', inviter: 'vega' });
+  assert.deepEqual([devIos.open, devIos.steps, devIos.lead], ['riftjumpers://join/dev/ab23cd45ef', undefined, undefined]);
 
   for (const state of [{ env: 'alpha', id: null, platform: 'android' }, { env: 'alpha', id: 'ab23cd45ef', platform: 'ios', lookup: 'invalid' }]) {
     const x = RJ.view(state);

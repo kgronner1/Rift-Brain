@@ -7,6 +7,7 @@
 //   .well-known/assetlinks.json             each Android package with every known SHA-256 fingerprint
 //   .well-known/apple-app-site-association  Team ID + bundle id, every path; no details while either is unknown
 //   robots.txt                              nothing to index: every page is someone's invite
+//   assets/<file>                           every file of web/join/assets (the page's fonts), as it is
 //
 // stdout: one line per file, "FILE <key> <content type> <cache control>" (ops/join/publish.sh uploads with exactly
 // these), then "UNKNOWN <field>" for each null in site.json. A malformed value (a fingerprint, a URL, an id) stops
@@ -28,6 +29,11 @@ const BUNDLE_ID_RE = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 const HOST_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 const PAGE_CACHE = 'public, max-age=300';
 const WELL_KNOWN_CACHE = 'public, max-age=3600';
+const ASSET_CACHE = 'public, max-age=604800';
+const ASSET_TYPES = Object.freeze({
+  '.otf': 'font/otf', '.ttf': 'font/ttf', '.woff2': 'font/woff2', '.png': 'image/png', '.svg': 'image/svg+xml',
+});
+const ASSET_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/;
 
 function isHttps(s) {
   try {
@@ -124,6 +130,7 @@ export function page(site, { template = fs.readFileSync(path.join(HERE, 'index.t
     "default-src 'none'",
     `script-src 'sha256-${sha256b64(script[1])}'`,
     `style-src 'sha256-${sha256b64(style[1])}'`,
+    "font-src 'self'",
     `connect-src ${connect}`,
     'img-src data:',
     "base-uri 'none'",
@@ -131,6 +138,19 @@ export function page(site, { template = fs.readFileSync(path.join(HERE, 'index.t
   ].join('; ');
   html = html.replace('<!--@CSP@-->', () => `<meta http-equiv="Content-Security-Policy" content="${csp}">`);
   return { html, csp, pageSite };
+}
+
+// web/join/assets, as files to serve under assets/: a name it cannot serve (a type it does not know, a dotfile, a
+// directory) stops the build.
+export function assetFiles(dir = path.join(HERE, 'assets')) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).sort().map((name) => {
+    const type = ASSET_TYPES[path.extname(name).toLowerCase()];
+    if (!ASSET_NAME_RE.test(name) || !type || !fs.statSync(path.join(dir, name)).isFile()) {
+      throw new Error(`web/join/assets/${name}: not a file this site serves (${Object.keys(ASSET_TYPES).join(', ')})`);
+    }
+    return { key: `assets/${name}`, body: fs.readFileSync(path.join(dir, name)), contentType: type, cacheControl: ASSET_CACHE };
+  });
 }
 
 // Everything the site serves: [{key, body, contentType, cacheControl}], plus what is unknown. Throws on a problem.
@@ -147,6 +167,7 @@ export function buildSite(site, opts = {}) {
     // No extension: its type is set explicitly, as Apple requires.
     { key: '.well-known/apple-app-site-association', body: `${JSON.stringify(appleAppSiteAssociation(site), null, 2)}\n`, contentType: 'application/json', cacheControl: WELL_KNOWN_CACHE },
     { key: 'robots.txt', body: 'User-agent: *\nDisallow: /\n', contentType: 'text/plain; charset=utf-8', cacheControl: PAGE_CACHE },
+    ...assetFiles(opts.assetsDir),
   ];
   return { files, unknown };
 }

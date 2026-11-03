@@ -6,102 +6,231 @@
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
 <!--@CSP@-->
 <title>Rift Jumpers invite</title>
 <link rel="icon" href="data:,">
+<link rel="preload" href="/assets/akira-expanded.otf" as="font" type="font/otf" crossorigin>
 <style>
+/* The look of riftjumpers.space (its src/styles/rift.css): Akira Expanded for display type, Michroma for the rest. */
+@font-face {
+  font-family: 'Akira Expanded';
+  src: url('/assets/akira-expanded.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Michroma';
+  src: url('/assets/michroma-regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
 :root {
-  --bg: #04050d;
-  --panel: #0b0f22;
-  --line: #1d2a52;
-  --text: #e8ecff;
-  --dim: #9aa6d1;
-  --glow: #5ef2ff;
-  --glow-ink: #021418;
-  --warn: #ffcf5e;
+  --accent: #00f4fd;
+  --accent-light: #80fafe;
+  --accent-scan: rgb(0 244 253 / 0.5);
+  --accent-soft: rgb(0 244 253 / 0.14);
+  --accent-line: rgb(0 244 253 / 0.42);
+  --ink: #f2f6fb;
+  --text: #e6ecf5;
+  --muted: #a9b4c6;
+  --faint: #8793a8;
+  --card: rgb(9 12 22 / 0.8);
+  --hairline: rgb(255 255 255 / 0.1);
+  --display: 'Akira Expanded', 'Michroma', sans-serif;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
+html { background: #03040a; }
 body {
+  margin: 0;
   min-height: 100vh;
-  background: radial-gradient(ellipse at 50% -10%, #12204a 0%, var(--bg) 60%) fixed, var(--bg);
   color: var(--text);
-  font: 17px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: #03040a;
+  font-family: 'Michroma', 'Eurostile', sans-serif;
   -webkit-text-size-adjust: 100%;
+  /* The logo's glow reaches past the edges; hidden for a Safari older than 16, which has no clip. */
+  overflow-x: hidden;
+  overflow-x: clip;
 }
+/* A still starfield and the rift's glow above the page. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 130% 55% at 50% -12%, rgb(0 244 253 / 0.16), transparent 62%),
+    radial-gradient(1px 1px at 23px 41px, rgb(255 255 255 / 0.8), transparent 70%),
+    radial-gradient(1px 1px at 141px 97px, rgb(255 255 255 / 0.55), transparent 70%),
+    radial-gradient(1.5px 1.5px at 77px 173px, rgb(128 250 254 / 0.7), transparent 70%),
+    radial-gradient(1px 1px at 189px 23px, rgb(255 255 255 / 0.45), transparent 70%),
+    radial-gradient(1px 1px at 59px 127px, rgb(255 255 255 / 0.35), transparent 70%);
+  background-size: auto, 211px 211px, 233px 233px, 277px 277px, 251px 251px, 197px 197px;
+}
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 main {
-  max-width: 34rem;
+  position: relative;
+  z-index: 1;
+  max-width: 30rem;
   margin: 0 auto;
-  padding: max(28px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  padding: max(36px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
 }
-.brand {
-  letter-spacing: 0.32em;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--glow);
-  text-shadow: 0 0 12px rgba(94, 242, 255, 0.55);
-  margin: 0 0 28px;
+.eyebrow {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--accent);
 }
-h1 { font-size: 26px; line-height: 1.25; margin: 0 0 12px; overflow-wrap: anywhere; }
-.lead { color: var(--dim); margin: 0 0 24px; }
-.button {
-  display: block;
+.logo-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  margin: 0 0 34px;
+}
+.logo {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 21rem);
+  font-family: var(--display);
+  font-size: clamp(30px, 10.5vw, 50px);
+  line-height: 0.98;
+  text-transform: uppercase;
+  transform: skewX(-11deg);
+}
+.logo::before {
+  content: '';
+  position: absolute;
+  inset: -18% -8%;
+  z-index: -1;
+  background: radial-gradient(closest-side, rgb(0 244 253 / 0.2), rgb(0 244 253 / 0.06) 60%, transparent);
+}
+.logo-row { display: flex; align-items: center; gap: 0.16em; }
+.scan {
+  padding: 0 0.12em;
+  margin: 0 -0.12em;
+  color: transparent;
+  background: repeating-linear-gradient(180deg, var(--accent-light) 0 3px, var(--accent-scan) 3px 5px);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.speed {
+  flex: 1;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.075em;
+  padding: 0.06em 0;
+}
+.speed span { display: block; height: 0.065em; background: var(--accent-light); }
+.speed span:nth-child(1) { margin-left: 0.34em; }
+.speed span:nth-child(2) { margin-left: 0.2em; }
+.speed span:nth-child(3) { margin-left: 0.08em; }
+.headline {
+  margin: 0 0 14px;
   text-align: center;
-  padding: 15px 18px;
-  border-radius: 12px;
-  background: var(--glow);
-  color: var(--glow-ink);
-  font-weight: 700;
-  font-size: 18px;
-  text-decoration: none;
-  box-shadow: 0 0 22px rgba(94, 242, 255, 0.35);
-  margin: 0 0 28px;
+  font-weight: 400;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--ink);
 }
-.button:active { transform: translateY(1px); }
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
+.headline .name {
+  display: block;
+  margin: 0 0 10px;
+  font-family: var(--display);
+  font-size: clamp(22px, 7vw, 32px);
+  line-height: 1.1;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.headline .rest { display: block; color: var(--muted); font-size: 13px; }
+.lead { margin: 0 0 24px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.9; }
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 58px;
+  margin: 26px 0;
+  padding: 0 24px;
   border-radius: 14px;
-  padding: 18px 18px 6px;
-  margin: 0 0 20px;
+  text-decoration: none;
+  font-family: var(--display);
+  font-size: 14px;
+  text-transform: uppercase;
 }
-.panel h2 { font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin: 0 0 12px; }
-ol { margin: 0; padding: 0 0 0 1.3em; }
-li { margin: 0 0 14px; padding-left: 0.2em; }
-li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
-.how { display: block; color: var(--dim); font-size: 15px; margin-top: 2px; }
-.warn {
-  border-left: 3px solid var(--warn);
-  padding: 4px 0 4px 12px;
-  margin: 0 0 20px;
-  color: var(--text);
-  font-size: 15px;
+.btn-light { background: var(--ink); color: #05060b; box-shadow: 0 0 32px var(--accent-soft); }
+.btn-light:active { background: #ffffff; }
+.card {
+  margin: 0 0 22px;
+  padding: 24px 22px 8px;
+  border-radius: 20px;
+  background: var(--card);
+  border: 1px solid rgb(255 255 255 / 0.08);
 }
-.again { font-weight: 600; margin: 0 0 20px; }
-.note { color: var(--dim); font-size: 15px; margin: 0 0 20px; }
-.switch {
-  display: inline-block;
-  background: none;
-  border: 0;
-  padding: 6px 0;
-  margin: 0 18px 0 0;
-  color: var(--dim);
-  font: inherit;
-  font-size: 15px;
+.card .eyebrow { margin: 0 0 16px; }
+.steps { list-style: none; margin: 0; padding: 0; }
+.steps li { display: flex; gap: 16px; padding: 16px 0; border-top: 1px solid var(--hairline); }
+.steps li:first-child { border-top: 0; padding-top: 2px; }
+.num { flex: none; padding-top: 3px; font-size: 12px; letter-spacing: 0.2em; color: var(--accent); }
+.step a {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
   text-decoration: underline;
+  text-decoration-color: var(--accent-line);
+  text-underline-offset: 4px;
+  overflow-wrap: anywhere;
+}
+.how { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.8; }
+.warn { margin: 0 0 22px; padding: 2px 0 2px 14px; border-left: 2px solid var(--accent); font-size: 12px; line-height: 1.9; }
+.again { margin: 0 0 22px; text-align: center; color: var(--ink); font-size: 13px; line-height: 1.8; }
+.note { margin: 0 0 18px; text-align: center; color: var(--faint); font-size: 12px; line-height: 1.8; }
+.switches { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 24px; margin: 4px 0 0; }
+.switch {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
   cursor: pointer;
 }
-.foot { color: #56608a; font-size: 13px; margin-top: 36px; }
+.foot { margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--hairline); text-align: center; }
+.foot a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--faint);
+}
 [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <p class="brand">RIFT JUMPERS</p>
-  <h1 id="title">Checking your invite...</h1>
+  <header class="logo-wrap">
+    <p class="eyebrow">You're invited</p>
+    <div class="logo" role="img" aria-label="Rift Jumpers">
+      <span class="logo-row" aria-hidden="true"><span class="scan">Rift</span><span class="speed"><span></span><span></span><span></span><span></span></span></span>
+      <span class="scan" aria-hidden="true">Jumpers</span>
+    </div>
+  </header>
+  <h1 class="headline" id="title">Checking your invite...</h1>
   <p class="lead" id="lead" hidden></p>
   <div id="body"></div>
-  <p class="foot">Rift Jumpers is in alpha testing.</p>
+  <footer class="foot"><a href="https://riftjumpers.space">riftjumpers.space</a></footer>
 </main>
 <script>
 (function () {
@@ -141,8 +270,8 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
     return (env === 'dev' ? '/dev/' : '/') + id;
   }
 
-  // For in-app browsers that keep links to themselves: Chrome's intent URL for the right package. Without the app it
-  // comes back to this page, #install.
+  // Android, for in-app browsers that keep links to themselves: Chrome's intent URL for the right package. Without the
+  // app it comes back to this page, #install.
   function intentUrl(env, id) {
     var path = invitePath(env, id);
     var back = 'https://' + SITE.host + path + '#install';
@@ -150,15 +279,20 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
       + ';S.browser_fallback_url=' + encodeURIComponent(back) + ';end';
   }
 
-  // The other platforms' switches, in case the user agent misled us.
+  // iPhone, when the universal link did not fire (an in-app browser): the game's own scheme.
+  function schemeUrl(env, id) {
+    return 'riftjumpers://join' + invitePath(env, id);
+  }
+
+  // The other platforms, in case the user agent misled us.
   var SWITCHES = {
     android: [{ platform: 'ios', label: 'On an iPhone instead?' }],
     ios: [{ platform: 'android', label: 'On Android instead?' }],
     desktop: [{ platform: 'android', label: 'On Android?' }, { platform: 'ios', label: 'On an iPhone?' }],
   };
 
-  // What the page says, from what is known: {title, lead?, open?, steps?, warn?, again?, notes: [], switches: []}.
-  // Only the one platform's steps. Pure.
+  // What the page says, from what is known. Only the one platform's steps. Pure.
+  //   {title, name?, lead?, open?, steps?, warn?, again?, notes: [], switches: []}
   // state: {env, id, platform, lookup: 'valid' | 'invalid' | 'error', inviter, installHint}
   function view(state) {
     var v = { notes: [], switches: [] };
@@ -167,9 +301,12 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
       return v;
     }
     v.switches = SWITCHES[state.platform] || [];
-    v.title = state.lookup === 'valid' && state.inviter
-      ? state.inviter + ' invited you to play Rift Jumpers'
-      : "You've been invited to play Rift Jumpers";
+    if (state.lookup === 'valid' && state.inviter) {
+      v.name = state.inviter;
+      v.title = state.inviter + ' invited you to play Rift Jumpers';
+    } else {
+      v.title = "You've been invited to play Rift Jumpers";
+    }
     if (state.lookup === 'error') v.notes.push("We couldn't check this invite just now. It may still work: open it in the game.");
     if (state.platform === 'desktop') {
       v.lead = 'Open this link on your phone.';
@@ -178,11 +315,11 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
     if (state.platform === 'android') {
       v.open = intentUrl(state.env, state.id);
       if (state.installHint) v.notes.push("The game isn't on this phone yet.");
+    } else {
+      v.open = schemeUrl(state.env, state.id);
     }
-    if (state.env === 'dev') {
-      if (state.platform === 'ios') v.lead = 'This is a dev invite: open it on an Android phone with RJ Dev installed.';
-      return v;
-    }
+    // Dev builds come from the Drive folder: no sign-up steps.
+    if (state.env === 'dev') return v;
     if (state.platform === 'android') {
       v.steps = [
         { text: 'Join the testers group', href: SITE.testers_group_url,
@@ -210,8 +347,24 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
     return n;
   }
 
+  var state = null;
+
+  function onSwitch(ev) {
+    state.platform = ev.currentTarget.getAttribute('data-platform');
+    render(view(state));
+    window.scrollTo(0, 0);
+  }
+
+  // Every value goes in as text: an inviter's name is never markup.
   function render(v) {
-    document.getElementById('title').textContent = v.title;
+    var title = document.getElementById('title');
+    while (title.firstChild) title.removeChild(title.firstChild);
+    if (v.name) {
+      title.appendChild(el('span', 'name', v.name));
+      title.appendChild(el('span', 'rest', 'invited you to play Rift Jumpers'));
+    } else {
+      title.textContent = v.title;
+    }
     var lead = document.getElementById('lead');
     lead.textContent = v.lead || '';
     lead.hidden = !v.lead;
@@ -219,31 +372,34 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
     while (body.firstChild) body.removeChild(body.firstChild);
     for (var i = 0; i < v.notes.length; i++) body.appendChild(el('p', 'note', v.notes[i]));
     if (v.open) {
-      var a = el('a', 'button', 'Open the game');
+      var a = el('a', 'btn btn-light', 'Open the game');
       a.href = v.open;
       body.appendChild(a);
     }
     if (v.steps) {
-      var panel = el('section', 'panel');
-      panel.appendChild(el('h2', null, v.open ? 'Not installed yet?' : 'Get the game'));
-      var ol = el('ol');
+      var card = el('section', 'card');
+      card.appendChild(el('p', 'eyebrow', v.open ? 'Not installed yet?' : 'Get the game'));
+      var ol = el('ol', 'steps');
       for (var j = 0; j < v.steps.length; j++) {
         var s = v.steps[j];
         var li = el('li');
+        li.appendChild(el('span', 'num', (j < 9 ? '0' : '') + (j + 1)));
+        var step = el('div', 'step');
         var link = el('a', null, s.text);
         link.href = s.href;
         link.rel = 'noopener noreferrer';
-        li.appendChild(link);
-        if (s.how) li.appendChild(el('span', 'how', s.how));
+        step.appendChild(link);
+        if (s.how) step.appendChild(el('span', 'how', s.how));
+        li.appendChild(step);
         ol.appendChild(li);
       }
-      panel.appendChild(ol);
-      body.appendChild(panel);
+      card.appendChild(ol);
+      body.appendChild(card);
     }
     if (v.warn) body.appendChild(el('p', 'warn', v.warn));
     if (v.again) body.appendChild(el('p', 'again', v.again));
     if (v.switches.length) {
-      var row = el('p');
+      var row = el('div', 'switches');
       for (var k = 0; k < v.switches.length; k++) {
         var b = el('button', 'switch', v.switches[k].label);
         b.type = 'button';
@@ -254,14 +410,6 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
       body.appendChild(row);
     }
     document.title = v.title;
-  }
-
-  var state = null;
-
-  function onSwitch(ev) {
-    state.platform = ev.currentTarget.getAttribute('data-platform');
-    render(view(state));
-    window.scrollTo(0, 0);
   }
 
   // {lookup, inviter} from GET /v1/invites/:id (Rift-Brain): no headers, no credentials.
@@ -281,7 +429,7 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
       .catch(function () { finish({ lookup: 'error' }); });
   }
 
-  var api = { parsePath: parsePath, platformOf: platformOf, intentUrl: intentUrl, view: view };
+  var api = { parsePath: parsePath, platformOf: platformOf, intentUrl: intentUrl, schemeUrl: schemeUrl, view: view };
   if (typeof document === 'undefined') {
     this.RJJoin = api;
     return;
