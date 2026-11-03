@@ -188,3 +188,18 @@ test('a brain restart: the new brain verifies and adopts a lobby it never spawne
   assert.deepEqual(host.stopped, [], 'an adopted lobby is not a stray');
   assert.equal(ENV.GAME_PORTS.includes(adopted.port), true);
 });
+
+test('RJ 539: the heartbeat\'s admits_spectators, a boolean when present, over HTTP', async (t) => {
+  const s = await start(t);
+  const { lobby } = await seatedLobby(s);
+  const bad = await s.call('POST', '/lobby/heartbeat', { lobby: lobby.id, body: { ...beat(lobby, 'INGAME'), admits_spectators: 'yes' } });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.body.error.code, 'VALIDATION');
+  assert.match(bad.body.error.message, /admits_spectators must be a boolean/);
+  assert.equal(lobby.state, 'PREGAME');
+  const ok = await s.call('POST', '/lobby/heartbeat', { lobby: lobby.id, body: beat(lobby, 'INGAME', { admits: true }) });
+  assert.deepEqual([ok.status, ok.body], [200, { result: 'ok', data: {} }]);
+  assert.deepEqual([lobby.state, lobby.admitsSpectators], ['INGAME', true]);
+  assert.equal((await s.call('POST', '/lobby/heartbeat', { lobby: lobby.id, body: beat(lobby, 'INGAME') })).status, 200);
+  assert.equal(lobby.admitsSpectators, false, 'absent: an older server');
+});
