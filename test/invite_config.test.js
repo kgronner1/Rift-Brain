@@ -8,7 +8,7 @@ const path = require('path');
 const { validateDocument, FLAG_NAMES } = require('../src/config/remoteSchema');
 const { mergeDocument, defaultView } = require('../src/config/remote');
 const { loadEnv } = require('../src/config/env');
-const { newInviteId, normalizeInviteId, INVITE_ALPHABET } = require('../src/storage/invites');
+const { newInviteId, normalizeInviteId, mintInvite, INVITE_ALPHABET, INVITE_ID_LENGTH, INVITE_ID_RE } = require('../src/storage/invites');
 const { createInviteSweep } = require('../src/invites/sweep');
 const { loggedPath } = require('../src/middleware/requestId');
 const { quietLogger } = require('./match_fixture');
@@ -103,6 +103,30 @@ test('invite ids: 10 characters of the alphabet without 0/1/i/l/o, from the CSPR
   for (const bad of [null, 12, '', 'ab23cd45e', 'ab23cd45efg', 'ab23cd45e0', 'ab23cd45el', 'ab23-d45ef']) {
     assert.equal(normalizeInviteId(bad), null, String(bad));
   }
+});
+
+// A contract rule (Wobble Planet specs/invite-links.md, 2.1), not a detail: the release app's Android link filter
+// (Wobble Planet InviteUrl.androidManifestContents(), MINTED_ID_LENGTH) claims a bare path of exactly 10 characters,
+// since an intent filter cannot say "not /dev/". An id of any other length would open in no app, or in the dev app.
+test('the invite id length is fixed at 10 (a contract rule the Android release filter depends on)', async () => {
+  assert.equal(INVITE_ID_LENGTH, 10);
+  assert.equal(INVITE_ID_RE.source, '^[23456789abcdefghjkmnpqrstuvwxyz]{10}$');
+  for (const randomInt of [() => 0, (n) => n - 1, (n) => Math.floor(n / 2), undefined]) {
+    assert.equal(newInviteId(randomInt).length, 10);
+  }
+  // What the table is given: mintInvite's id (over a stand-in db) is 10 characters, however the draw goes.
+  const inserted = [];
+  const db = { async execute(sql, args) {
+    if (sql.startsWith('INSERT')) inserted.push(args[0]);
+    return [{ affectedRows: 0 }];
+  } };
+  for (let i = 0; i < 50; i++) {
+    const { id } = await mintInvite(7, { db, now: Date.UTC(2026, 10, 3) });
+    assert.match(id, /^.{10}$/);
+  }
+  assert.ok(inserted.every((id) => id.length === 10));
+  // And the other lengths are not ids at all.
+  for (const n of [6, 9, 11, 16]) assert.equal(normalizeInviteId('a'.repeat(n)), null, `${n} characters`);
 });
 
 test('the request log shows /v1/invites/:id, never the id', () => {
