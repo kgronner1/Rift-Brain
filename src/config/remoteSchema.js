@@ -19,7 +19,10 @@ const ACTION_KINDS = ['dismiss', 'retry', 'open_url', 'open_store', 'login'];
 // feedback (RJ 488): the client hides its Feedback buttons when false. The brain never reads it, so a stale config
 // cannot make /v1/feedback refuse an entry the client then deletes.
 // guest_play (RJ 493): clients make a silent guest account when true; when false the brain refuses new guests too.
-const FLAG_NAMES = ['multiplayer', 'quickplay', 'private_lobbies', 'account_creation', 'feedback', 'guest_play'];
+// invites (RJ 458): clients show PLAY WITH FRIENDS and mint links when true; when false the brain refuses the mint
+// (POST /v1/me/invites) and join_user too. The lookup (GET /v1/invites/:id) still answers, so a page already open
+// still names the inviter.
+const FLAG_NAMES = ['multiplayer', 'quickplay', 'private_lobbies', 'account_creation', 'feedback', 'guest_play', 'invites'];
 // server.rate_limits: every key is per minute unless its name says otherwise; [lo, hi] for each.
 const RATE_LIMITS = Object.freeze({
   login_per_min_ip: [1, 100000],

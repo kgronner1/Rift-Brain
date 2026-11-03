@@ -169,6 +169,9 @@ function loadEnv(raw = process.env) {
   // RJ 493: when the guest cull first runs after boot, and how often after that. A local stack sets them short.
   const guestCullFirstSec = readSeconds(raw, 'GUEST_CULL_FIRST_SEC', 300, 0, problems);
   const guestCullEverySec = readSeconds(raw, 'GUEST_CULL_EVERY_SEC', 3600, 1, problems);
+  const joinUrlBase = readJoinUrlBase(raw, env, problems);
+  // RJ 458: how long a follow ticket waits for its inviter to take a seat. A local stack sets it short.
+  const followWindowSec = readSeconds(raw, 'FOLLOW_WINDOW_SEC', 600, 1, problems);
 
   if (problems.length) throw new EnvError(problems);
 
@@ -195,6 +198,9 @@ function loadEnv(raw = process.env) {
     FEEDBACK_SHEET_WARNINGS: Object.freeze(feedbackSheet.warnings),
     GUEST_CULL_FIRST_SEC: guestCullFirstSec,
     GUEST_CULL_EVERY_SEC: guestCullEverySec,
+    // RJ 458: what an invite's url starts with (no trailing slash), or null: POST /v1/me/invites answers INTERNAL.
+    JOIN_URL_BASE: joinUrlBase,
+    FOLLOW_WINDOW_SEC: followWindowSec,
   });
 }
 
@@ -208,6 +214,31 @@ function readSeconds(raw, name, def, lo, problems) {
     return def;
   }
   return n;
+}
+
+// RJ 458 (Wobble Planet specs/invite-links.md, 2.1): an invite's url is JOIN_URL_BASE/<id>. Unset, dev and alpha take
+// the link domain's own (an existing .env needs no new line); legacy and prod have none. Set, it must be an https URL
+// with no query, fragment or credentials; a trailing slash is dropped.
+const JOIN_URL_DEFAULTS = Object.freeze({
+  dev: 'https://join.riftjumpers.space/dev',
+  alpha: 'https://join.riftjumpers.space',
+});
+
+function readJoinUrlBase(raw, env, problems) {
+  if (isBlank(raw.JOIN_URL_BASE)) return JOIN_URL_DEFAULTS[env] || null;
+  const s = String(raw.JOIN_URL_BASE).trim().replace(/\/+$/, '');
+  let u;
+  try {
+    u = new URL(s);
+  } catch (e) {
+    problems.push(`JOIN_URL_BASE is not a URL: "${raw.JOIN_URL_BASE}"`);
+    return null;
+  }
+  if (u.protocol !== 'https:' || u.search || u.hash || u.username || u.password) {
+    problems.push(`JOIN_URL_BASE must be https://host[/path], with no query, fragment or credentials, got "${raw.JOIN_URL_BASE}"`);
+    return null;
+  }
+  return s;
 }
 
 // FEEDBACK_SHEET_URL and FEEDBACK_SHEET_SECRET (RJ 489, ops/feedback/README.md): both optional, and both or neither.
@@ -239,4 +270,4 @@ function readFeedbackSheet(raw) {
   return { sheet: ok ? Object.freeze({ url, secret }) : null, warnings };
 }
 
-module.exports = { loadEnv, loadMysqlEnv, EnvError, ENVS, LEGACY_DEFAULTS };
+module.exports = { loadEnv, loadMysqlEnv, EnvError, ENVS, LEGACY_DEFAULTS, JOIN_URL_DEFAULTS };

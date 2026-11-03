@@ -25,6 +25,9 @@ const SPEC_4_3 = {
   NO_CAPACITY: ['backoff', 'request', 'retry'],
   QUEUE_TICKET_INVALID: ['never', 'request', 'dismiss'],
   INTERNAL: ['backoff', 'request', 'retry'],
+  // RJ 458, additive (Wobble Planet specs/invite-links.md, 2.3 and 2.6).
+  INVITE_INVALID: ['never', 'request', 'dismiss'],
+  FOLLOW_TIMEOUT: ['never', 'request', 'dismiss'],
   HANDSHAKE_UNSUPPORTED: ['never', 'multiplayer', 'open_store'],
   WIRE_MISMATCH: ['never', 'multiplayer', 'open_store'], // dismiss when the client is newer
   JOIN_TOKEN_INVALID: ['never', 'request', 'retry'],
