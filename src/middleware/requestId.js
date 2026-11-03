@@ -9,13 +9,18 @@ function newRef() {
   return `r-${crypto.randomBytes(6).toString('hex')}`;
 }
 
+// The path a log line shows: an invite's id (RJ 458) is a link anyone holding can follow, so it stays out of logs.
+function loggedPath(path) {
+  return path.replace(/^(\/v1\/invites\/)[^/]+/, '$1:id');
+}
+
 // Sets req.ref and X-RJ-Ref, and logs one line when the response is finished: method, path (no query), status,
 // time, ref, and the error code when there was one.
 function requestId({ logger = log } = {}) {
   return function requestIdMiddleware(req, res, next) {
     const ref = newRef();
     const started = process.hrtime.bigint();
-    const path = String(req.originalUrl || req.url).split('?')[0];
+    const path = loggedPath(String(req.originalUrl || req.url).split('?')[0]);
     req.ref = ref;
     res.setHeader('X-RJ-Ref', ref);
     res.on('finish', () => {
@@ -27,4 +32,4 @@ function requestId({ logger = log } = {}) {
   };
 }
 
-module.exports = { requestId, newRef };
+module.exports = { requestId, newRef, loggedPath };

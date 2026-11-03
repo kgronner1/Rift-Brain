@@ -1,6 +1,7 @@
 'use strict';
 // API v1 (spec 4.2-4.4, 4.8-4.10): the router mounted at /v1 on the public listener. In order:
 //   1. requestId      the ref, its X-RJ-Ref header and the request's log line
+//      GET /v1/invites/:id (RJ 458), the one public route: a browser calls it with no X-RJ headers (invites.js)
 //   2. clientHeaders  the five gates of spec 4.9, before the body is read and before auth
 //   3. express.json   the body (64 KB at most)
 //   4. the routes     each locked route checks the session itself (requireSession), then its rate limits
@@ -22,6 +23,7 @@ const { registerUserRoutes } = require('./users');
 const { registerMatchRoutes } = require('./match');
 const { registerQueueRoutes } = require('./queue');
 const { registerFeedbackRoutes } = require('./feedback');
+const { registerInviteRoutes, registerPublicInviteRoutes } = require('./invites');
 const { createAdmission } = require('../../admission/admission');
 
 const BODY_LIMIT = '64kb';
@@ -35,14 +37,16 @@ function rateLimited(r) {
 // admission: admission/admission.js's createAdmission(); the caller starts its sweep. Without one, the router makes
 // its own, which is swept only when a test calls sweep(). feedbackStore: tests' stand-in for the feedback table;
 // accountStore: for the account reads and the delete behind /v1/me (RJ 473); credentialStore: for the revoke behind
-// /v1/session/revoke (RJ 506).
-function createV1Router({ env, remote, now = () => Date.now(), limiter = createRateLimiter({ now }), match = null, findUser, admission, feedbackStore, accountStore, credentialStore }) {
+// /v1/session/revoke (RJ 506); inviteStore: for the invites table (RJ 458).
+function createV1Router({ env, remote, now = () => Date.now(), limiter = createRateLimiter({ now }), match = null, findUser, admission, feedbackStore, accountStore, credentialStore, inviteStore }) {
   if (!env.SESSION_KEY) throw new Error('/v1 needs SESSION_KEY');
   const config = () => remote.current();
   admission = admission || createAdmission({ env, config, now });
   const router = express.Router();
 
+  const invites = inviteStore ? { invites: inviteStore } : {};
   router.use(requestId());
+  registerPublicInviteRoutes(router, { env, now, limiter, rateLimited, ...invites });
   router.use(clientHeaders({ serverEnv: env.ENV, config, now }));
   router.use(express.json({ limit: BODY_LIMIT }));
 
@@ -54,7 +58,8 @@ function createV1Router({ env, remote, now = () => Date.now(), limiter = createR
   registerAccountRoutes(router, deps);
   registerMeRoutes(router, { ...deps, match, ...(accountStore ? { accounts: accountStore } : {}) });
   registerUserRoutes(router, deps);
-  if (match) registerMatchRoutes(router, { ...deps, match, ...(findUser ? { findUser } : {}) });
+  registerInviteRoutes(router, { ...deps, ...invites });
+  if (match) registerMatchRoutes(router, { ...deps, match, ...(findUser ? { findUser } : {}), ...invites });
   registerQueueRoutes(router, { admission, match });
   registerFeedbackRoutes(router, { ...deps, ...(feedbackStore ? { store: feedbackStore } : {}) });
 
