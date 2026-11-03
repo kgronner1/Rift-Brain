@@ -20,6 +20,8 @@
 #   feedback           every row deleted: each holds a sender's username and install id, text a player typed, and
 #                      their device's details. Dev needs no other environment's feedback, and the forwarder can
 #                      never send a copied row to the sheet when there is none
+#   invites            every row deleted (RJ 458): each is a live link to an account, and a copied one would let
+#                      anyone holding it follow that account's dev twin
 #   the rest           kept as they are: stats, accolades, the player card and schema_migrations hold numbers and
 #                      times only (and the string columns KEEP_STRINGS names), keyed by a user_id made anonymous above
 # Safe to re-run: a scrubbed database scrubs to itself.
@@ -49,7 +51,7 @@ DEV_HASH='$2b$10$HSHyJmHlrYq1975Uw.uPwegf10x2dJ2M7oJ.HArYmWSr2DcT90KHq'
 # Every table a Rift-Brain database holds (migrations/ makes them, and src/migrate.js makes schema_migrations), by
 # what the scrub does to it. A new table goes in one of the lists, with the header above saying why; a new users
 # column goes in USERS_COLUMNS once the users step scrubs it, or needs no scrub.
-EMPTY_TABLES="user_credentials feedback"
+EMPTY_TABLES="user_credentials feedback invites"
 KEEP_TABLES="user_stats user_accolades user_accolades_time_earned user_player_card schema_migrations"
 USERS_COLUMNS="user_id username email password access_token is_guest last_login created_date"
 # The only columns of a kept table that may hold anything but a number or a time.
@@ -194,6 +196,8 @@ has_table "$TARGET" user_credentials && CREDS="$(admin_sql "SELECT COUNT(*) FROM
 TOKENS=0
 has_column "$TARGET" users access_token \
   && TOKENS="$(admin_sql "SELECT COUNT(*) FROM \`$TARGET\`.users WHERE access_token IS NOT NULL")"
+INVITES=0
+has_table "$TARGET" invites && INVITES="$(admin_sql "SELECT COUNT(*) FROM \`$TARGET\`.invites")"
 FEEDBACK=0
 UNSENT=0
 ANON_PENDING=0
@@ -202,7 +206,7 @@ if has_table "$TARGET" feedback; then
   UNSENT="$(admin_sql "SELECT COUNT(*) FROM \`$TARGET\`.feedback WHERE sheet_state = 'pending'")"
   ANON_PENDING="$(admin_sql "SELECT COUNT(*) FROM \`$TARGET\`.feedback WHERE sheet_state = 'anon_pending'")"
 fi
-say "$USERS users, $DIRTY not yet scrubbed; $CREDS device credentials; $TOKENS legacy access tokens; $FEEDBACK feedback entries"
+say "$USERS users, $DIRTY not yet scrubbed; $CREDS device credentials; $TOKENS legacy access tokens; $FEEDBACK feedback entries; $INVITES invites"
 KEPT=""
 for t in $KEEP_TABLES; do
   if has_table "$TARGET" "$t"; then KEPT="$KEPT${KEPT:+, }$t"; fi
@@ -218,7 +222,7 @@ names an account deleted since, until $TARGET's forwarder rewrites their Player 
 fi
 
 if [ "$APPLY" = 0 ]; then
-  plan "rewrite email, username and password of $DIRTY users; delete $CREDS credentials; clear $TOKENS access tokens; delete $FEEDBACK feedback entries"
+  plan "rewrite email, username and password of $DIRTY users; delete $CREDS credentials; clear $TOKENS access tokens; delete $FEEDBACK feedback entries; delete $INVITES invites"
   say "done (plan only)"
   exit 0
 fi
@@ -252,6 +256,6 @@ if has_column "$TARGET" users access_token; then
   [ "$(admin_sql "SELECT COUNT(*) FROM \`$TARGET\`.users WHERE access_token IS NOT NULL")" = 0 ] || die "access tokens remain"
 fi
 FINISHED=1
-say "PASS $USERS users scrubbed; no credentials, feedback or access tokens left"
+say "PASS $USERS users scrubbed; no credentials, feedback, invites or access tokens left"
 say "every account in $TARGET now signs in as user<id> (or user<id>@example.invalid) with the password: $DEV_PASSWORD"
 say "done (applied)"

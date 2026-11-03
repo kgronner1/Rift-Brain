@@ -6,4 +6,5 @@ module.exports = {
   ...require('./accolades'),
   ...require('./playerCard'),
   ...require('./feedback'),
+  ...require('./invites'),
 };
