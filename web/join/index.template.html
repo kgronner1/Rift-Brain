@@ -79,6 +79,18 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
 }
 .again { font-weight: 600; margin: 0 0 20px; }
 .note { color: var(--dim); font-size: 15px; margin: 0 0 20px; }
+.switch {
+  display: inline-block;
+  background: none;
+  border: 0;
+  padding: 6px 0;
+  margin: 0 18px 0 0;
+  color: var(--dim);
+  font: inherit;
+  font-size: 15px;
+  text-decoration: underline;
+  cursor: pointer;
+}
 .foot { color: #56608a; font-size: 13px; margin-top: 36px; }
 [hidden] { display: none !important; }
 </style>
@@ -138,14 +150,23 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
       + ';S.browser_fallback_url=' + encodeURIComponent(back) + ';end';
   }
 
-  // What the page says, from what is known: {title, lead?, open?, steps?, warn?, again?, notes: []}. Pure.
+  // The other platforms' switches, in case the user agent misled us.
+  var SWITCHES = {
+    android: [{ platform: 'ios', label: 'On an iPhone instead?' }],
+    ios: [{ platform: 'android', label: 'On Android instead?' }],
+    desktop: [{ platform: 'android', label: 'On Android?' }, { platform: 'ios', label: 'On an iPhone?' }],
+  };
+
+  // What the page says, from what is known: {title, lead?, open?, steps?, warn?, again?, notes: [], switches: []}.
+  // Only the one platform's steps. Pure.
   // state: {env, id, platform, lookup: 'valid' | 'invalid' | 'error', inviter, installHint}
   function view(state) {
-    var v = { notes: [] };
+    var v = { notes: [], switches: [] };
     if (!state.id || state.lookup === 'invalid') {
       v.title = 'This invite has expired; ask your friend for a new one.';
       return v;
     }
+    v.switches = SWITCHES[state.platform] || [];
     v.title = state.lookup === 'valid' && state.inviter
       ? state.inviter + ' invited you to play Rift Jumpers'
       : "You've been invited to play Rift Jumpers";
@@ -221,7 +242,26 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
     }
     if (v.warn) body.appendChild(el('p', 'warn', v.warn));
     if (v.again) body.appendChild(el('p', 'again', v.again));
+    if (v.switches.length) {
+      var row = el('p');
+      for (var k = 0; k < v.switches.length; k++) {
+        var b = el('button', 'switch', v.switches[k].label);
+        b.type = 'button';
+        b.setAttribute('data-platform', v.switches[k].platform);
+        b.addEventListener('click', onSwitch);
+        row.appendChild(b);
+      }
+      body.appendChild(row);
+    }
     document.title = v.title;
+  }
+
+  var state = null;
+
+  function onSwitch(ev) {
+    state.platform = ev.currentTarget.getAttribute('data-platform');
+    render(view(state));
+    window.scrollTo(0, 0);
   }
 
   // {lookup, inviter} from GET /v1/invites/:id (Rift-Brain): no headers, no credentials.
@@ -247,7 +287,7 @@ li a { color: var(--glow); font-weight: 600; overflow-wrap: anywhere; }
     return;
   }
   var where = parsePath(location.pathname);
-  var state = {
+  state = {
     env: where.env, id: where.id, platform: platformOf(navigator.userAgent, navigator.maxTouchPoints),
     installHint: location.hash === '#install',
   };
