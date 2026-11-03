@@ -60,7 +60,8 @@ src/auth/               tokens (sign/verify, the lobby key) and device credentia
 src/routes/v1/          API v1 (RJ 465); /v1/match/join and /v1/queue's lobby kind (RJ 466); its admission kind (RJ 468)
 src/guests/cull.js      the hourly cull of idle guest accounts (RJ 493)
 src/invites/sweep.js    the hourly sweep of expired invites (RJ 458); src/storage/invites.js is the table
-web/join/               a draft of the invite link page and its .well-known files (RJ 458; on hold, not deployed)
+web/join/               the invite link site (RJ 458): its values, page, fonts and build; ops/join/publish.sh
+                        publishes it to join.riftjumpers.space (infra/README.md, "The invite link site (RJ 458)")
 src/admission/          the admission queue in front of sign-in (RJ 468, spec M6), in process memory
 src/feedback/           player feedback (RJ 488/489): the entry's cleaning, the sheet's row, the sheet forwarder
 ops/feedback/           the Player Feedback sheet's Apps Script and its runbook (RJ 489)

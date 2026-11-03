@@ -6,7 +6,8 @@ Wobble Planet's `specs/alpha-readiness-2026-10-02.md`, sections 4.5, 5 and M1.
 
 ```
 infra/stacks.env            fixed, public settings (domain, stack names, regions, AWS profile "rj")
-infra/cfn/rj-edge.yaml      us-east-1: ACM certificate, S3 bucket (private, versioned), CloudFront + OAC, alias records
+infra/cfn/rj-edge.yaml      us-east-1: ACM certificate, S3 bucket (private, versioned), CloudFront + OAC, alias records;
+                            the same again for join.<domain>, the invite link site, with a CloudFront Function (RJ 458)
 infra/cfn/rj-box.yaml       us-west-1: security group rj-public, A records api / api-dev / play
 infra/deploy_stacks.sh      plan (default) | --changeset | --apply; then attaches rj-public to the box
 infra/provision_box.sh      the Mac side: copies infra/box/ to the box and runs it over SSH
@@ -21,6 +22,8 @@ config/<env>.client.v1.json the remote config sources (changes go through PRs)
 ops/config/validate.mjs     checks a document: types, clamps, env (src/config/remoteSchema.js)
 ops/config/publish.sh       validate, client parser, lock guard, serial, upload, invalidate, fetch back
 ops/config/rollback.sh      republish an earlier S3 version under a new serial
+web/join/                   the invite link site's source: site.json (its values), the page, the fonts (RJ 458)
+ops/join/publish.sh         build web/join, upload with explicit types, invalidate, fetch back (--dry-run first)
 ops/drills/                 release drills 1, 2, 5 and 7 (plan by default), the swarm's accounts and report (RJ 471);
                             ops/drills/test/drills_local.sh and drill5_local.sh run them locally; measure_capacity.sh, the
                             box's capacity per match (RJ 484), with capacity_agent.sh and capacity_report.py
@@ -216,6 +219,11 @@ handles in Docker on the box's release.
 Until cutover (spec 7a) nothing here touches the legacy brain, `rift_brain`, its binary, TCP 3000 or
 UDP 8080-8085, and today's builds never read any of it. Newest first:
 
+7. **The invite link site** (RJ 458; "The invite link site"). Remove the `Join*` resources and outputs, and the
+   `JoinSubdomain` parameter, from `rj-edge.yaml` and re-run `deploy_stacks.sh --edge-only --apply`: the distribution,
+   its function, headers policy, certificate and records go; the bucket stays (Retain), emptied and deleted by hand as
+   step 1 says. Links then stop resolving, so App Links and universal links stop verifying: a phone opens a link in
+   the browser, which finds nothing.
 6. **Log rotation** (RJ 505; "Log rotation (RJ 505)"), on the box. The copies already made stay (`rm
    /opt/rj/*/logs/brain.*.log-*` removes them), and logrotate itself is the system's: leave it.
    ```
@@ -455,3 +463,40 @@ node ops/config/validate.mjs <file> --env dev just the checks
 
 `--local-root <dir>` stands a directory in for S3 and CloudFront (no AWS call): `npm test` drives both scripts
 that way.
+
+## The invite link site (RJ 458)
+
+`https://join.riftjumpers.space/<id>` (alpha) and `/dev/<id>` (dev) are invite links (Wobble Planet
+`specs/invite-links.md`, section 5). With the game installed, Android (App Links) and iOS (universal links) open the
+game; without it, the link opens one static page, which reads the id from its path, asks the environment's brain
+who sent it (`GET /v1/invites/:id`, README "Invite links (RJ 458)"), and shows that platform's way in.
+
+- **The stack.** `rj-edge.yaml` serves `join.<domain>` on config's pattern: its own certificate, private bucket
+  (`rj-join-<account>`, versioned, Retain), OAC, distribution and alias records, plus a CloudFront Function that answers
+  every path with `index.html` except `/.well-known/*`, `/assets/*` and `/robots.txt`, and a response headers policy
+  (HSTS, nosniff, no framing, `Referrer-Policy: no-referrer`, since the invite id is in the path). Deploy it with
+  `bash infra/deploy_stacks.sh --edge-only` (plan), `--changeset`, then `--apply`. The certificate's DNS validation
+  and the distribution take 5-20 minutes, as config's did.
+- **The source.** `web/join/site.json` holds every value the site needs, and `null` for one not known yet (today: the
+  iOS Team ID and bundle id, the TestFlight public link, and the optional upload key). `web/join/build.mjs` makes the
+  page (`index.template.html`, with a CSP of its inline script's and style's hashes), `.well-known/assetlinks.json`
+  (each package with every known SHA-256), `.well-known/apple-app-site-association` (empty while the iOS values are
+  null), `robots.txt` (nothing to index) and `assets/` (the fonts). A null is left out and listed; a malformed value
+  stops the build. The page is styled after riftjumpers.space (its `src/styles/rift.css`) and serves its own fonts.
+- **Publishing.** `bash ops/join/publish.sh --dry-run` builds it and prints every file with its type and the
+  commands; `bash ops/join/publish.sh` uploads each file with `put-object` and that type (both `.well-known` files as
+  `application/json`: the association file has no extension, so nothing could guess it), the fonts first and
+  `index.html` last, invalidates `/*`, and fetches back both `.well-known` files (bytes and type) and an invite path.
+  It deletes nothing: a file dropped from `web/join` stays in the bucket until removed by hand.
+- **Checking it live,** after a publish:
+  ```
+  curl -sI https://join.riftjumpers.space/.well-known/assetlinks.json | grep -i content-type   # application/json
+  curl -s "https://digitalassetlinks.googleapis.com/v1/statements:list?source.web.site=https://join.riftjumpers.space&relation=delegate_permission/common.handle_all_urls"
+  ```
+  and on a handset with the build installed: `adb shell pm get-app-links com.riftjumpers.game.dev` says `verified`.
+- **The keys.** Android verifies a package against the SHA-256 of the certificate that signed the installed APK: Play
+  installs are signed with Play's app-signing key (in `site.json`); a dev APK with the debug keystore of the Mac that
+  built it (Alex's is in `site.json`; a dev APK built anywhere else needs that machine's added, from
+  `keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android`).
+- **The brain's side.** `JOIN_URL_BASE` builds each invite's url and `JOIN_PAGE_ORIGINS` is the lookup's CORS origin;
+  both default to this site (README, "Invite links (RJ 458)").
