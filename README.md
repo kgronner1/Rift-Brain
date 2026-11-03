@@ -317,7 +317,8 @@ sends the field, and refuses a mid-match handshake (`MATCH_IN_PROGRESS`), so it 
   only the players none of them has room for. The queue's quickplay tickets take the same order. A running lobby where
   no human holds a seat is passed by (the sweep is about to end it).
 - **A spectator holds its seat as a player does:** its token reserves it, `player-joined` seats it, the heartbeat's
-  `players` lists it (so it is kept), and its results count. Nothing else in the heartbeat changes.
+  `players` lists it (so it is kept). It has no ship, so the server reports no results for it until it plays. Nothing
+  else in the heartbeat changes.
 
 **The lobby-wait queue** is the `lobby` kind of spec 4.2's `queued`: FIFO, `poll_after_ms` 3000 ± 20% (1000 ± 20%
 while the lobby boots or the brain is adopting), `expires_in_sec` 60 (each poll renews it), capped at
