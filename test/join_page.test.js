@@ -207,6 +207,26 @@ test('valid, iPhone: Open the game by the riftjumpers:// scheme; TestFlight when
   assert.equal(w.again, 'Installed? Tap your invite link again.');
 });
 
+test('the game missing: Chrome\'s #install fallback says so; an Open that left the page in front says it may be; iPhone before TestFlight says not out yet', async () => {
+  const { RJ } = await pageApi();
+  const base = { env: 'alpha', id: 'ab23cd45ef', lookup: 'valid', inviter: 'nova' };
+  assert.equal(RJ.view({ ...base, platform: 'android' }).missing, undefined, 'nothing until Open the game was tried');
+  assert.equal(RJ.view({ ...base, platform: 'android', installHint: true }).missing,
+    "The game isn't on this phone yet. Get it below, then tap your invite link again.");
+  const stalled = RJ.view({ ...base, platform: 'android', openStalled: true });
+  assert.equal(stalled.missing, "Didn't open? The game may not be on this phone yet. Get it below, then tap your invite link again.");
+  assert.equal(stalled.steps.length, 3, 'the steps stay');
+  assert.equal(RJ.view({ ...base, env: 'dev', platform: 'android', installHint: true }).missing,
+    "The game isn't on this phone yet.", 'no steps to point at on a dev link');
+  assert.equal(RJ.view({ ...base, platform: 'ios', openStalled: true }).missing,
+    "The game didn't open: Rift Jumpers for iPhone isn't out yet.");
+  const s = site();
+  s.ios.testflight_url = 'https://testflight.apple.com/join/AbCdEf12';
+  const { RJ: RJ2 } = await pageApi(s);
+  assert.match(RJ2.view({ ...base, platform: 'ios', openStalled: true }).missing, /^Didn't open\? .* Get it below/);
+  assert.equal(RJ.view({ ...base, platform: 'desktop', openStalled: true }).missing, undefined);
+});
+
 test('desktop, dev links, an expired invite, and a lookup that failed', async () => {
   const { RJ } = await pageApi();
   const d = RJ.view({ env: 'alpha', id: 'ab23cd45ef', platform: 'desktop', lookup: 'valid', inviter: 'nova' });

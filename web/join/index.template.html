@@ -191,6 +191,10 @@ main {
 .warn { margin: 0 0 22px; padding: 2px 0 2px 14px; border-left: 2px solid var(--accent); font-size: 12px; line-height: 1.9; }
 .again { margin: 0 0 22px; text-align: center; color: var(--ink); font-size: 13px; line-height: 1.8; }
 .note { margin: 0 0 18px; text-align: center; color: var(--faint); font-size: 12px; line-height: 1.8; }
+.note.missing { color: var(--ink); font-size: 13px; }
+.card.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { from { border-color: var(--accent); box-shadow: 0 0 32px var(--accent-soft); } }
+@media (prefers-reduced-motion: reduce) { .card.flash { animation: none; } }
 .switches { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 24px; margin: 4px 0 0; }
 .switch {
   min-height: 44px;
@@ -238,6 +242,9 @@ main {
   var SITE = /*@SITE@*/null;
   var ID_RE = /^[23456789abcdefghjkmnpqrstuvwxyz]{10}$/;
   var LOOKUP_TIMEOUT_MS = 8000;
+  // No page can ask whether an app is installed. A tap on Open the game that leaves this page in front this long is
+  // taken as the game not being there.
+  var OPEN_STALL_MS = 2000;
 
   // "/<id>" is an alpha invite, "/dev/<id>" a dev one; anything else has no id.
   function parsePath(pathname) {
@@ -271,7 +278,7 @@ main {
   }
 
   // Android, for in-app browsers that keep links to themselves: Chrome's intent URL for the right package. Without the
-  // app it comes back to this page, #install.
+  // app it comes back to this page, #install: a same-page hash change, so the page re-renders on hashchange.
   function intentUrl(env, id) {
     var path = invitePath(env, id);
     var back = 'https://' + SITE.host + path + '#install';
@@ -293,7 +300,8 @@ main {
 
   // What the page says, from what is known. Only the one platform's steps. Pure.
   //   {title, name?, lead?, open?, steps?, warn?, again?, notes: [], switches: []}
-  // state: {env, id, platform, lookup: 'valid' | 'invalid' | 'error', inviter, installHint}
+  // state: {env, id, platform, lookup: 'valid' | 'invalid' | 'error', inviter, installHint, openStalled}
+  //   installHint: Chrome came back to #install (no app); openStalled: Open the game left the page in front.
   function view(state) {
     var v = { notes: [], switches: [] };
     if (!state.id || state.lookup === 'invalid') {
@@ -314,9 +322,17 @@ main {
     }
     if (state.platform === 'android') {
       v.open = intentUrl(state.env, state.id);
-      if (state.installHint) v.notes.push("The game isn't on this phone yet.");
     } else {
       v.open = schemeUrl(state.env, state.id);
+    }
+    if (state.installHint || state.openStalled) {
+      if (state.platform === 'ios' && !SITE.ios.testflight_url) {
+        v.missing = "The game didn't open: Rift Jumpers for iPhone isn't out yet.";
+      } else {
+        v.missing = state.installHint ? "The game isn't on this phone yet."
+          : "Didn't open? The game may not be on this phone yet.";
+        if (state.env !== 'dev') v.missing += ' Get it below, then tap your invite link again.';
+      }
     }
     // Dev builds come from the Drive folder: no sign-up steps.
     if (state.env === 'dev') return v;
@@ -353,6 +369,23 @@ main {
   }
 
   var state = null;
+  var stallTimer = null;
+
+  function cancelStall() {
+    if (stallTimer !== null) { clearTimeout(stallTimer); stallTimer = null; }
+  }
+
+  // The game opening hides this page; still in front, it didn't. A browser's open-in-app prompt can outlast the wait,
+  // so the note it then shows says "may not".
+  function onOpen() {
+    cancelStall();
+    stallTimer = setTimeout(function () {
+      stallTimer = null;
+      if (document.visibilityState !== 'visible') return;
+      state.openStalled = true;
+      render(view(state), true);
+    }, OPEN_STALL_MS);
+  }
 
   function onSwitch(ev) {
     state.platform = ev.currentTarget.getAttribute('data-platform');
@@ -360,8 +393,8 @@ main {
     window.scrollTo(0, 0);
   }
 
-  // Every value goes in as text: an inviter's name is never markup.
-  function render(v) {
+  // Every value goes in as text: an inviter's name is never markup. `reveal` brings the how-to-get-it card into view.
+  function render(v, reveal) {
     var title = document.getElementById('title');
     while (title.firstChild) title.removeChild(title.firstChild);
     if (v.name) {
@@ -379,10 +412,17 @@ main {
     if (v.open) {
       var a = el('a', 'btn btn-light', 'Open the game');
       a.href = v.open;
+      a.addEventListener('click', onOpen);
       body.appendChild(a);
     }
+    var missing = v.missing ? el('p', 'note missing', v.missing) : null;
+    if (missing) {
+      missing.setAttribute('role', 'status');
+      body.appendChild(missing);
+    }
+    var card = null;
     if (v.steps) {
-      var card = el('section', 'card');
+      card = el('section', 'card');
       card.appendChild(el('p', 'eyebrow', v.open ? 'Not installed yet?' : 'Get the game'));
       var ol = el('ol', 'steps');
       for (var j = 0; j < v.steps.length; j++) {
@@ -415,6 +455,11 @@ main {
       body.appendChild(row);
     }
     document.title = v.title;
+    if (reveal && missing) {
+      var target = card || missing;
+      if (target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (card) card.classList.add('flash');
+    }
   }
 
   // {lookup, inviter} from GET /v1/invites/:id (Rift-Brain): no headers, no credentials.
@@ -449,10 +494,19 @@ main {
     render(view(state));
     return;
   }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState !== 'visible') cancelStall(); });
+  window.addEventListener('pagehide', cancelStall);
+  // Chrome's fallback from Open the game, when the app is missing, only adds #install to this page's own URL.
+  window.addEventListener('hashchange', function () {
+    if (location.hash !== '#install' || !state.lookup) return;
+    cancelStall();
+    state.installHint = true;
+    render(view(state), true);
+  });
   lookup(where.env, where.id, function (r) {
     state.lookup = r.lookup;
     state.inviter = r.inviter;
-    render(view(state));
+    render(view(state), state.installHint);
   });
 }).call(this);
 </script>
