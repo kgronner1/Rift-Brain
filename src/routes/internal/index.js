@@ -3,7 +3,8 @@
 // carries X-RJ-Lobby: <lobby_id>, X-RJ-Lobby-Key: hex HMAC(LOBBY_MASTER_KEY, lobby_id) and X-RJ-Wire. Because the key
 // is derived, a restarted brain verifies a lobby it no longer remembers, and the heartbeat adopts it.
 //
-//   POST /internal/v1/lobby/heartbeat      {port, wire, fp, state, players:[{user_id,seat}], bots, private_code, pid}
+//   POST /internal/v1/lobby/heartbeat      {port, wire, fp, state, players:[{user_id,seat}], bots, private_code, pid,
+//                                           admits_spectators}   the last optional (RJ 539; absent: false)
 //   POST /internal/v1/lobby/player-joined  {user_id, seat}
 //   POST /internal/v1/lobby/player-left    {user_id, seat}
 //   POST /internal/v1/match/results        [{user_id, stats}, ...]   only users who took a seat in this lobby

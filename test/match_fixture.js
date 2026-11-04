@@ -59,7 +59,7 @@ function quietLogger() {
 }
 
 // opts: entries, view patch fn, bootGraceMs (0 by default: most tests start past the adoption window), host, clock,
-// followWindowMs (RJ 458; the registry's 600 s by default).
+// followWindowMs (RJ 458; the registry's 600 s by default), env (ENV by default).
 function makeRegistry(opts = {}) {
   const clock = opts.clock || { t: T0 };
   const host = opts.host || fakeHost();
@@ -67,7 +67,7 @@ function makeRegistry(opts = {}) {
   const manifest = { entries: opts.entries || [manifestEntry(17, FP_A)], read() { return this.entries; } };
   const logger = opts.logger || quietLogger();
   const reg = createMatchRegistry({
-    env: ENV, manifest, host, config: () => view, now: () => clock.t, logger,
+    env: opts.env || ENV, manifest, host, config: () => view, now: () => clock.t, logger,
     bootGraceMs: opts.bootGraceMs === undefined ? 0 : opts.bootGraceMs,
     random: opts.random || Math.random,
     ...(opts.followWindowMs === undefined ? {} : { followWindowMs: opts.followWindowMs }),
@@ -81,13 +81,16 @@ function player(extra = {}) {
   return { mode: 'quickplay', uid, uname: `pilot${uid}`, install: `install-${uid}`, wire: 17, fp: FP_A, ...extra };
 }
 
-// The heartbeat a lobby's game server would send.
-function beat(lobby, state, { players, bots = 0, pid } = {}) {
+// The heartbeat a lobby's game server would send. admits: its admits_spectators (RJ 539), left out when undefined, as
+// an older server sends it.
+function beat(lobby, state, { players, bots = 0, pid, admits } = {}) {
   const seated = players || [...lobby.seats].filter(([, s]) => s.status === 'seated').map(([seat, s]) => ({ user_id: s.uid, seat }));
-  return {
+  const b = {
     port: lobby.port, wire: lobby.wire, fp: lobby.fp, state, players: seated, bots,
     private_code: lobby.privateCode || '', pid: pid === undefined ? lobby.pid : pid,
   };
+  if (admits !== undefined) b.admits_spectators = admits;
+  return b;
 }
 
 function lobbyKey(id) {

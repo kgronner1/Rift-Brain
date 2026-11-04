@@ -267,10 +267,12 @@ anything else -> `SERVER_BEHIND`. A private code whose lobby runs another pair -
 `<binary> --port=<p> --lobby_id=<id> --net_env=<ENV> --brain_url=http://127.0.0.1:<INTERNAL_PORT> [--private_code=<c>]`,
 with `RJ_JOIN_KEY` and `RJ_LOBBY_KEY` in its environment (never argv), its working directory the binary's, and nothing
 else of the brain's environment but `PATH HOME USER LANG LC_ALL TMPDIR`. Its states come from its heartbeats
-(`BOOTING`, `PREGAME`, `INGAME`, `POSTGAME`); only `PREGAME` takes players. Capacity is seated humans + reservations +
-bots < 4. A join token's seat is reserved for 60 s; `player-joined` seats it, `player-left` frees it. A lobby with no
-heartbeat for 45 s is stopped; an empty one ends after `POSTGAME`, or after 120 s empty in `PREGAME` or `INGAME`. A
-lobby whose server process exits ends at once (the brain hears it while it is the process's parent).
+(`BOOTING`, `PREGAME`, `INGAME`, `POSTGAME`). `PREGAME` takes players; `INGAME` and `POSTGAME` take spectators, but only
+from a server that says it admits them ("Spectating" below); `BOOTING` takes nobody. Capacity is seated humans (players
+and spectators) + reservations + bots < 4. A join token's seat is reserved for 60 s; `player-joined` seats it,
+`player-left` frees it. A lobby with no heartbeat for 45 s is stopped; an empty one ends after `POSTGAME`, or after
+120 s empty in `PREGAME` or `INGAME`. A lobby whose server process exits ends at once (the brain hears it while it is
+the process's parent).
 When a lobby ends, its server is found by its command line (never by a pid alone) and sent SIGTERM, whether or not
 this brain is its parent (an adopted lobby's is not), and logged as `[match] lobby <id>: SIGTERM to its server`; one
 still there 5 s later gets SIGKILL (`[host] ... outlived SIGTERM`). A lobby the brain ends while its server should be
@@ -297,6 +299,27 @@ remote shell running it, whose own command line holds the pattern.
   cool-down one spawn is tried; one more early death blocks it again at once. Any heartbeat from a server of that
   protocol clears the count. Read `lobby-<id>.log`, then fix the binary (`deploy_server.sh --replace`) or withdraw it.
 
+**Spectating (RJ 539).** A game server that can take a player mid-match as a spectator (no ship; they watch, and get
+one at the next `PREGAME`) says so in every heartbeat with the additive `admits_spectators: true`. An older server never
+sends the field, and refuses a mid-match handshake (`MATCH_IN_PROGRESS`), so it never gets a mid-match join token.
+
+- **Seatable:** a lobby in `PREGAME`, or in `INGAME` or `POSTGAME` while its latest verified heartbeat says
+  `admits_spectators: true` (an adopted lobby's too, from its first heartbeat). Never `BOOTING`. Absent means false; a
+  value that is not a boolean is `VALIDATION`, as any bad heartbeat field is. The brain logs
+  `[match] lobby <id> admits spectators` when a lobby starts saying it (and `no longer admits` if it stops).
+- **`join_private`, `join_user`, followers and the lobby wait** take a seat in a seatable lobby with room, as they do in
+  `PREGAME` (a direct join while nobody waits ahead and not in a restart's first 30 s). `LOBBY_FULL` is still only a
+  full `PREGAME`'s answer: a full running lobby is waited on, and a seat that opens there mid-match goes to the next in
+  line. A heartbeat or `player-left` from any seatable lobby drains the queue (the sweep does every second anyway). A
+  lobby that does not admit spectators is waited on until its next `PREGAME`, exactly as before.
+- **Quickplay** takes the fullest public `PREGAME` lobby with room for the player and their followers; else the fullest
+  seatable `POSTGAME` one (it plays sooner); else the fullest seatable `INGAME` one; else it queues and spawns, counting
+  only the players none of them has room for. The queue's quickplay tickets take the same order. A running lobby where
+  no human holds a seat is passed by (the sweep is about to end it).
+- **A spectator holds its seat as a player does:** its token reserves it, `player-joined` seats it, the heartbeat's
+  `players` lists it (so it is kept). It has no ship, so the server reports no results for it until it plays. Nothing
+  else in the heartbeat changes.
+
 **The lobby-wait queue** is the `lobby` kind of spec 4.2's `queued`: FIFO, `poll_after_ms` 3000 ± 20% (1000 ± 20%
 while the lobby boots or the brain is adopting), `expires_in_sec` 60 (each poll renews it), capped at
 `server.lobby_queue_max` (beyond it, `NO_CAPACITY`; a player waiting on a lobby that is booting is not counted).
@@ -318,7 +341,9 @@ heartbeat). `match/results` takes today's array and answers `{players, ignored_u
 **Invite links** add a fourth mode, `join_user`, and a second ticket kind, `follow`: see "Invite links (RJ 458)".
 
 **Tests.** `test/manifest.test.js`, `test/match_registry.test.js`, `test/match_http.test.js` (every
-`/v1/match/join` outcome), `test/internal_http.test.js` (the lobby key, adoption after a restart, the seat checks)
+`/v1/match/join` outcome), `test/spectate_registry.test.js` (RJ 539: the `admits_spectators` gate, mid-match seats for
+each kind of join, quickplay's order), `test/internal_http.test.js` (the lobby key, adoption after a restart, the seat
+checks)
 `test/match_host.test.js` (a real spawn and UDP test), `test/crash_loop.test.js` (the breaker) and
 `test/server_crash_guards.test.js` (a real spawn's core limit, its exit and its log; the log cap) need no database; `test/internal.db.test.js` writes match
 results against one.
@@ -582,9 +607,10 @@ contract is Wobble Planet `specs/invite-links.md`, section 2 (additive to spec s
 - **Join:** `POST /v1/match/join {mode: "join_user", invite}` 🔒🎮 (the multiplayer gates apply). In order:
   `VALIDATION` (flag off, no `invite` string); `AUTH_INVALID`; `INVITE_INVALID` (unknown, expired, malformed);
   `VALIDATION` "That's your own invite."; then where the inviter is. A seat in a lobby of another `(wire, fp)`:
-  `LOBBY_WRONG_VERSION`. A seat in a lobby of the caller's, in `PREGAME` with room: ok, as `join_private`. Mid-match,
-  full or booting: `queued`, kind `lobby` (which for an invite also waits through a full `PREGAME`, where a code join is
-  told `LOBBY_FULL`). No seat: `queued`, kind **`follow`**, message `Waiting for <name> to start a match...`,
+  `LOBBY_WRONG_VERSION`. A seat in a seatable lobby of the caller's (`PREGAME`, or mid-match on a server that admits
+  spectators: "Spectating (RJ 539)" under Matchmaking) with room: ok, as `join_private`. Not seatable, or full:
+  `queued`, kind `lobby` (which for an invite also waits through a full `PREGAME`, where a code join is told
+  `LOBBY_FULL`). No seat: `queued`, kind **`follow`**, message `Waiting for <name> to start a match...`,
   `expires_in_sec` the window left (600 s; a poll does not extend it). "Holds a seat" is the inviter's reservation if
   they hold one, else a seat they took.
 - **A follow** is polled at `GET /v1/queue/:ticket` and cancelled with `DELETE`, like any lobby ticket, but dropped
@@ -592,13 +618,12 @@ contract is Wobble Planet `specs/invite-links.md`, section 2 (additive to spec s
   Messages to say "I'm in" must still be following on their way back. So is the lobby wait a follow starts as or
   turns into (`expires_in_sec` says so). Seated while away, a follower's 15 s admitted hold lapses and is taken again
   at the next sweep while the lobby has room (else the lobby wait), so the first poll back collects a seat in the
-  inviter's lobby. The moment the inviter holds a seat, the brain
-  reserves seats there for the live followers while it has room (FIFO), and their next poll answers ok; the rest turn
-  into the lobby wait for that lobby; a follower on another protocol gets `LOBBY_WRONG_VERSION`. A follower's own
-  followers come along. A window that ends seatless: `FOLLOW_TIMEOUT`. An inviter's deleted account: its followers get
-  `INVITE_INVALID`. A lobby wait from an invite whose lobby ends: `LOBBY_NOT_FOUND` "That match has ended...". Follow
-  tickets live in memory and do not count against `server.lobby_queue_max`; a brain restart drops them
-  (`QUEUE_TICKET_INVALID`).
+  inviter's lobby. The moment the inviter holds a seat, the brain reserves seats there for the live followers while it
+  is seatable with room (FIFO), and their next poll answers ok; the rest turn into the lobby wait for that lobby; a
+  follower on another protocol gets `LOBBY_WRONG_VERSION`. A follower's own followers come along. A window that ends
+  seatless: `FOLLOW_TIMEOUT`. An inviter's deleted account: its followers get `INVITE_INVALID`. A lobby wait from an
+  invite whose lobby ends: `LOBBY_NOT_FOUND` "That match has ended...". Follow tickets live in memory and do not count
+  against `server.lobby_queue_max`; a brain restart drops them (`QUEUE_TICKET_INVALID`).
 - **Quickplay with followers:** a player with live followers on their protocol is placed only in a public lobby with
   room for 1 + followers (at most a whole lobby), and the spawn counts them. `create_private` and `join_private` take
   the followers in as above when the inviter's seat comes.
