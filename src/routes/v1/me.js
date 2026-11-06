@@ -11,6 +11,9 @@
 // check and the write still recreates nothing: user_stats and user_player_card have foreign keys to users, and the
 // accolade sync only updates.
 //
+// PUT /v1/me/player-card: an accolade the player has earned, or '' for none. Anything else is VALIDATION and writes
+// nothing, so the accolade already equipped stands (RJ 547).
+//
 // DELETE /v1/me: RATE_LIMITED (login_per_min_account, per account, in a bucket of its own), then AUTH_INVALID when the
 // account is gone; then, for an account with a login, VALIDATION (password missing, not a string or too long) and
 // AUTH_INVALID "That password isn't right." A guest (RJ 493) has no password: whatever is sent is ignored. Not a
@@ -54,6 +57,7 @@ function registerMeRoutes(router, { requireSession, config, limiter, rateLimited
 
   router.put('/me/player-card', requireSession, liveAccount, route(async (req, res) => {
     const r = await equipPlayerCard(req.session.uid, body(req).equipped_accolade_key);
+    if (!r) fail('VALIDATION', { message: "You haven't earned that accolade yet." });
     sendOk(res, { equipped_accolade_key: r.equipped_accolade_key });
   }));
 
