@@ -51,28 +51,26 @@ async function setPlayerCard(user_id, access_token, equipped_accolade_key) {
     [user_id, access_token]
   );
   if (!authRows[0]) throw new Error('Unauthorized');
-  return equipPlayerCard(user_id, equipped_accolade_key);
+  const equipped = await equipPlayerCard(user_id, equipped_accolade_key);
+  return equipped || { user_id, equipped_accolade_key: '' };
 }
 
-// Equips an accolade the player has earned. A key that is not an accolade, or one not earned, equips nothing ('').
-// The caller has already established who user_id is (the session on /v1, the access_token on the legacy route).
-async function equipPlayerCard(user_id, equipped_accolade_key) {
-  const db = getDB();
-  let key = '';
-  if (typeof equipped_accolade_key === 'string' && equipped_accolade_key !== '') {
-    const valid = await isValidAccoladeKey(equipped_accolade_key);
-    if (valid) {
-      const [earnRows] = await db.execute(
-        `SELECT ${quoteColumn(equipped_accolade_key)} AS cnt FROM user_accolades WHERE user_id = ? LIMIT 1;`,
-        [user_id]
-      );
-      if (earnRows[0] && earnRows[0].cnt > 0) {
-        key = equipped_accolade_key;
-      }
-    }
-  }
+async function holdsAccolade(user_id, key) {
+  if (!(await isValidAccoladeKey(key))) return false;
+  const [earnRows] = await getDB().execute(
+    `SELECT ${quoteColumn(key)} AS cnt FROM user_accolades WHERE user_id = ? LIMIT 1;`,
+    [user_id]
+  );
+  return Boolean(earnRows[0] && earnRows[0].cnt > 0);
+}
 
-  await db.execute(
+// Equips an accolade the player has earned, or with '' equips nothing. Anything else -- not a string, not an accolade,
+// not earned -- writes nothing and returns null, so the accolade already equipped stands (RJ 547).
+// The caller has already established who user_id is (the session on /v1, the access_token on the legacy route).
+async function equipPlayerCard(user_id, key) {
+  if (key !== '' && !(await holdsAccolade(user_id, key))) return null;
+
+  await getDB().execute(
     `INSERT INTO user_player_card (user_id, equipped_accolade_key)
      VALUES (?, ?)
      ON DUPLICATE KEY UPDATE equipped_accolade_key = ?;`,

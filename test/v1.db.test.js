@@ -266,13 +266,19 @@ test('user 0 reads the global earn rates, as the logged-out gallery and the game
   assert.equal(code(await call('GET', '/v1/users/-1/accolades')), 'VALIDATION');
 });
 
-test('the player card equips an earned accolade, nothing for an unearned one, and reads back publicly', { skip }, async () => {
+test('the player card equips an earned accolade, refuses anything else leaving it equipped, and reads back publicly', { skip }, async () => {
   assert.deepEqual((await call('PUT', '/v1/me/player-card', { token: ctx.one.session, body: { equipped_accolade_key: 'Ghost' } })).body,
     { result: 'ok', data: { equipped_accolade_key: 'Ghost' } });
   assert.deepEqual((await call('GET', `/v1/users/${ctx.one.id}/player-card`)).body,
     { result: 'ok', data: { user_id: ctx.one.id, equipped_accolade_key: 'Ghost' } });
-  assert.equal((await call('PUT', '/v1/me/player-card', { token: ctx.one.session, body: { equipped_accolade_key: 'Beaming' } })).body.data.equipped_accolade_key, '');
-  assert.equal((await call('PUT', '/v1/me/player-card', { token: ctx.one.session, body: { equipped_accolade_key: 'x` = 1 --' } })).body.data.equipped_accolade_key, '');
+  const unearned = await call('PUT', '/v1/me/player-card', { token: ctx.one.session, body: { equipped_accolade_key: 'Beaming' } });
+  assert.deepEqual([unearned.status, code(unearned), unearned.body.error.message], [400, 'VALIDATION', "You haven't earned that accolade yet."]);
+  for (const bad of ['x` = 1 --', 7, null, undefined]) {
+    assert.equal(code(await call('PUT', '/v1/me/player-card', { token: ctx.one.session, body: { equipped_accolade_key: bad } })), 'VALIDATION', String(bad));
+  }
+  assert.equal((await call('GET', `/v1/users/${ctx.one.id}/player-card`)).body.data.equipped_accolade_key, 'Ghost', 'a refusal leaves it equipped');
+  assert.equal((await call('PUT', '/v1/me/player-card', { token: ctx.one.session, body: { equipped_accolade_key: '' } })).body.data.equipped_accolade_key, '');
+  assert.equal((await call('GET', `/v1/users/${ctx.one.id}/player-card`)).body.data.equipped_accolade_key, '', "'' still unequips");
   assert.equal(code(await call('PUT', '/v1/me/player-card', { body: { equipped_accolade_key: 'Ghost' } })), 'AUTH_REQUIRED');
   assert.equal(code(await call('GET', '/v1/users/999999/player-card')), 'VALIDATION');
 });
