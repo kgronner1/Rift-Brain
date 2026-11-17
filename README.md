@@ -113,6 +113,7 @@ npm run migrate -- --status      # list applied and pending, change nothing
 | `0005_stats_defaults.sql` | `user_stats.num_jumps_alltime` and `mp_num_items_stolen_alltime` default to 0, NULLs backfilled (RJ 495) |
 | `0006_feedback_drop_ip.sql` | drops `feedback.ip` and rebuilds the table, so no address stays in its data file (RJ 504) |
 | `0007_invites.sql` | the `invites` table: one row per invite link, cascading on the user's delete (RJ 458) |
+| `0008_rj565_accolades.sql` | 17 accolade columns in both accolade tables; `user_stats.sp_num_rivals_killed_alltime` and `sp_most_rivals_killed_in_a_run` (RJ 565) |
 
 **Making `0001_baseline.sql`** (once, by hand, on the box). Over SSH:
 
