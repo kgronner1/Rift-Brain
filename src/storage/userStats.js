@@ -1,6 +1,7 @@
 // The user_stats table: the post-match update (with ELO) and the single-player sync.
 const { getDB } = require('../db');
-const { loadUserStatsColumns, filterSpStatsKeys, quoteColumn } = require('./columns');
+const { loadUserStatsColumns, filterSpStatsKeys, quoteColumn, SP_SYNC_CURRENCY_COLUMNS } = require('./columns');
+const { applyLegacySpSync } = require('./payloadLedger');
 const log = require('../log');
 const { ELO_DEFAULT_RATING, resolvePlacement, computeEloRatingChanges } = require('./elo');
 
@@ -294,8 +295,10 @@ async function postMatchPlayerStatsUpdate(body) {
 
 }
 
-// The single-player sync: when the client's _last_updated is newer than the row's, its sp_ and currency columns
-// replace the database's. Only keys filterSpStatsKeys() allows reach SQL; the rest come back in ignored_keys.
+// The single-player sync: when the client's _last_updated is newer than the row's, its sp_ columns replace the
+// database's. Only keys filterSpStatsKeys() allows reach SQL; the rest come back in ignored_keys. The ledger build
+// (RJ 587) sends no currency; an older build's currency_amount / currency_earned_alltime go through
+// applyLegacySpSync (storage/payloadLedger.js): never lower than the brain's, any rise journaled as legacy_sync.
 // body: {user_id, stats: {KEY: VALUE, ..., _last_updated}}. Returns {user_id, user_stats, ignored_keys}.
 async function singlePlayerStatsSync(body) {
 
@@ -310,7 +313,12 @@ async function singlePlayerStatsSync(body) {
   const { keys: updateKeys, ignored: ignored_keys } = filterSpStatsKeys(stats, columns);
   const lastUpdated = Number(stats._last_updated);
 
-  if (Number.isFinite(lastUpdated) && lastUpdated > 0 && updateKeys.length > 0) {
+  const sendsCurrency = updateKeys.some((key) => SP_SYNC_CURRENCY_COLUMNS.includes(key));
+
+  if (Number.isFinite(lastUpdated) && lastUpdated > 0 && updateKeys.length > 0 && sendsCurrency) {
+    // RJ 587: an older build's absolute currency values never lower the balance, and a rise is journaled.
+    await applyLegacySpSync(user_id, { stats, keys: updateKeys, lastUpdated }, { db });
+  } else if (Number.isFinite(lastUpdated) && lastUpdated > 0 && updateKeys.length > 0) {
     const [staleRows] = await db.execute(
       `SELECT user_id FROM user_stats WHERE user_id = ? AND UNIX_TIMESTAMP(_last_updated) < ?;`,
       [user_id, lastUpdated]

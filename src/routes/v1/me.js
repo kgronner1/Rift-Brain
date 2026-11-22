@@ -5,6 +5,7 @@
 //   PUT    /v1/me/player-card        {equipped_accolade_key}          -> {equipped_accolade_key}
 //   DELETE /v1/me                    {password}                       -> {}   (RJ 473: the account's hard delete)
 //   POST   /v1/me/upgrade            {username, email, password}      -> {user:{id, username, guest:false}}   (RJ 493)
+//   POST   /v1/me/payload/credit     {entries:[{ref, source, amount}]} -> {balance, earned_alltime, entries}  (RJ 587)
 //
 // A session is stateless, so it outlives a deleted account by up to an hour: the three writes first check that the
 // account still exists and answer AUTH_INVALID, writing nothing, when it does not. A delete that lands between that
@@ -24,6 +25,12 @@
 // POST /v1/me/upgrade (RJ 493): a guest gets a login on the same row (same id, credentials, session and stats). The
 // limits and the rules of POST /v1/accounts (accounts.js; checkNewUser, the reserved Pilot-NNNN names included), no
 // admission. AUTH_INVALID when the account is gone; VALIDATION "This account already has a login." for a non-guest.
+//
+// POST /v1/me/payload/credit (RJ 587): the player's payload entries, 0..32 (an empty array reads the balance), applied
+// in one transaction in the order sent (storage/payloadLedger.js; the rules are contract/payload.js). Not an array,
+// over 32 or a non-object entry: VALIDATION, checked before any database work, and nothing applied. Each entry's
+// answer is applied (credited), duplicate, rejected (reason) or deferred, in order. Like the syncs: no rate limit, no
+// admission, and AUTH_INVALID for a gone account.
 
 const { fail, sendOk } = require('../../contract/envelope');
 const log = require('../../log');
@@ -32,6 +39,7 @@ const { singlePlayerStatsSync, playerAccoladesSync, equipPlayerCard } = storage;
 const { PASSWORD_MAX } = require('./session');
 const { accountLimits, checkFieldMax, withRules } = require('./accounts');
 const { route, body } = require('./util');
+const { checkEntries } = require('../../contract/payload');
 
 const WRONG_PASSWORD = "That password isn't right.";
 const HAS_LOGIN = 'This account already has a login.';
@@ -39,7 +47,8 @@ const HAS_LOGIN = 'This account already has a login.';
 // accounts: { userExists, findAccount, verifyUserPassword, deleteUser, upgradeGuest } (storage/users.js); tests pass
 // their own.
 // match: the registry (match/registry.js), or null.
-function registerMeRoutes(router, { requireSession, config, limiter, rateLimited, match = null, accounts = storage }) {
+// payload: { applyPayloadEntries } (storage/payloadLedger.js); tests pass their own.
+function registerMeRoutes(router, { requireSession, config, limiter, rateLimited, match = null, accounts = storage, payload = storage }) {
   const liveAccount = route(async (req, res, next) => {
     if (!(await accounts.userExists(req.session.uid))) fail('AUTH_INVALID');
     next();
@@ -53,6 +62,16 @@ function registerMeRoutes(router, { requireSession, config, limiter, rateLimited
   router.post('/me/accolades/sync', requireSession, liveAccount, route(async (req, res) => {
     const r = await playerAccoladesSync({ user_id: req.session.uid, accolades: body(req).accolades });
     sendOk(res, { user_accolades: r.user_accolades, ignored_keys: r.ignored_keys });
+  }));
+
+  const payloadShape = (req, res, next) => {
+    const bad = checkEntries(body(req).entries);
+    if (bad) fail('VALIDATION', { message: bad });
+    next();
+  };
+
+  router.post('/me/payload/credit', requireSession, payloadShape, liveAccount, route(async (req, res) => {
+    sendOk(res, await payload.applyPayloadEntries(req.session.uid, body(req).entries, { from: 'client' }));
   }));
 
   router.put('/me/player-card', requireSession, liveAccount, route(async (req, res) => {

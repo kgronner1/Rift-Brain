@@ -367,8 +367,8 @@ async function findAccount(userId, db = getDB()) {
 }
 
 // The tables that hold a user's rows, in an order the foreign keys allow (user_stats' key does not cascade). invites
-// (RJ 458) cascades too; it is named so the delete says what it takes.
-const USER_TABLES = ['invites', 'user_credentials', 'user_player_card', 'user_accolades_time_earned', 'user_accolades', 'user_stats'];
+// (RJ 458) and payload_ledger (RJ 587) cascade too; they are named so the delete says what it takes.
+const USER_TABLES = ['payload_ledger', 'invites', 'user_credentials', 'user_player_card', 'user_accolades_time_earned', 'user_accolades', 'user_stats'];
 
 // A guest (RJ 493) idle for ? days -- three times the same number: no login, no creation and no credential used
 // since then (a restore and every hourly session refresh touch last_used_at). NOW() is the database's clock, the one
@@ -378,8 +378,8 @@ const IDLE_GUEST = `u.is_guest = 1
   AND (u.created_date IS NULL OR u.created_date < NOW() - INTERVAL ? DAY)
   AND NOT EXISTS (SELECT 1 FROM user_credentials c WHERE c.user_id = u.user_id AND c.last_used_at >= NOW() - INTERVAL ? DAY)`;
 
-// The hard delete, in one transaction: every per-user row and the users row (so every credential and invite, and the
-// leaderboard entries with user_stats), and the user's feedback kept but anonymised. Returns false when there was
+// The hard delete, in one transaction: every per-user row and the users row (so every credential, invite and payload
+// ledger row, and the leaderboard entries with user_stats), and the user's feedback kept but anonymised. Returns false when there was
 // no such user. Usable outside a request (db: a pool); the caller logs and releases the user's match seats.
 // idleGuestDays (the guest cull, RJ 493): delete only while the user is still a guest idle that long, checked under
 // the row lock, so a guest who upgrades or comes back after the cull picked it is kept.
@@ -502,4 +502,5 @@ module.exports = {
   createGuest,
   upgradeGuest,
   findIdleGuests,
+  USER_TABLES,
 };
