@@ -502,5 +502,4 @@ module.exports = {
   createGuest,
   upgradeGuest,
   findIdleGuests,
-  USER_TABLES,
 };

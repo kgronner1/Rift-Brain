@@ -7,10 +7,10 @@
 //   POST   /v1/me/upgrade            {username, email, password}      -> {user:{id, username, guest:false}}   (RJ 493)
 //   POST   /v1/me/payload/credit     {entries:[{ref, source, amount}]} -> {balance, earned_alltime, entries}  (RJ 587)
 //
-// A session is stateless, so it outlives a deleted account by up to an hour: the three writes first check that the
-// account still exists and answer AUTH_INVALID, writing nothing, when it does not. A delete that lands between that
-// check and the write still recreates nothing: user_stats and user_player_card have foreign keys to users, and the
-// accolade sync only updates.
+// A session is stateless, so it outlives a deleted account by up to an hour: the writes (the two syncs, the player
+// card and, RJ 587, the payload credit) first check that the account still exists and answer AUTH_INVALID, writing
+// nothing, when it does not. A delete that lands between that check and the write still recreates nothing: user_stats,
+// user_player_card and payload_ledger have foreign keys to users, and the accolade sync only updates.
 //
 // PUT /v1/me/player-card: an accolade the player has earned, or '' for none. Anything else is VALIDATION and writes
 // nothing, so the accolade already equipped stands (RJ 547).
