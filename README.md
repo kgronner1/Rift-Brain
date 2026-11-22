@@ -49,12 +49,12 @@ src/match/host.js       the box side: UDP port test, starting and stopping game 
 src/routes/internal/    the internal API, game server -> brain, on 127.0.0.1:INTERNAL_PORT (RJ 466)
 src/match/ports.js      which game port is free
 src/match/process.js    spawning and killing game server processes
-src/storage/            today's storage.js, split by table
+src/storage/            today's storage.js, split by table; payloadLedger.js is the payload ledger (RJ 587)
 src/routes/legacy/      today's routes, unchanged in path and shape; served only by the legacy brain (RJ 494)
 src/migrate.js          schema migrations (see "Migrations")
 src/config/remoteSchema.js  the remote config document's rules (RJ 463)
 src/config/remote.js    the brain's copy of its remote config document, read every 30 s (RJ 465)
-src/contract/           the /v1 envelope and the error code registry (RJ 465)
+src/contract/           the /v1 envelope and the error code registry (RJ 465); payload.js, the ledger's entry rules (RJ 587)
 src/middleware/         /v1's request id, client-header gates, session auth, rate limits, errors (RJ 465)
 src/auth/               tokens (sign/verify, the lobby key) and device credentials (RJ 465)
 src/routes/v1/          API v1 (RJ 465); /v1/match/join and /v1/queue's lobby kind (RJ 466); its admission kind (RJ 468)
@@ -114,6 +114,7 @@ npm run migrate -- --status      # list applied and pending, change nothing
 | `0006_feedback_drop_ip.sql` | drops `feedback.ip` and rebuilds the table, so no address stays in its data file (RJ 504) |
 | `0007_invites.sql` | the `invites` table: one row per invite link, cascading on the user's delete (RJ 458) |
 | `0008_rj565_accolades.sql` | 17 accolade columns in both accolade tables; `user_stats.sp_num_rivals_killed_alltime` and `sp_most_rivals_killed_in_a_run` (RJ 565) |
+| `0009_payload_ledger.sql` | the `payload_ledger` table: one row per payload change, unique per (user, entry id), cascading on the user's delete; no backfill (RJ 587) |
 
 **Making `0001_baseline.sql`** (once, by hand, on the box). Over SSH:
 
@@ -230,6 +231,76 @@ account's credential revokes the replaced one the same way (RJ 508). Wobble Plan
 the gates, with no database. `test/v1.db.test.js` covers the real revoke against `migrations/`: the restore and the
 refresh are refused after it, the other devices are untouched, and the log line is written.
 
+### The payload ledger (RJ 587)
+
+The payload balance is the brain's. Every change to it is one row of `payload_ledger` (`migrations/0009_payload_ledger.sql`),
+keyed by an entry id, `ref`, that counts once per account: a resent entry, the retry of a call whose answer was lost, and the
+same first reported by single player and by a game server all pay once. `user_stats.currency_amount` and
+`currency_earned_alltime` stay the running totals (the leaderboards, `GET /v1/users/:id/stats` and the post-match JSON read
+them), written in the same transaction as each row, so a balance is always what `user_stats` held when 0009 ran (there is no
+backfill) plus the account's rows. The contract is Wobble Planet's RJ 587 spec, additive to spec section 4 (Alex and Kyler,
+2026-11-22).
+
+- **`POST /v1/me/payload/credit`** 🔒 `{entries: [{ref, source, amount}, ...]}`, 0..32 entries; an empty array reads the
+  balance. Not an array, more than 32, or an entry that is not an object: `VALIDATION` before any database work, and nothing
+  is applied. Then `AUTH_INVALID` for a deleted account, as the syncs. No rate limit, no admission, not a multiplayer route.
+  ok, one answer per entry in the order sent:
+
+  ```
+  {"balance": 520, "earned_alltime": 1020,
+   "entries": [{"ref": "carry", "status": "applied", "credited": 50}, {"ref": "run:k3Jx9_aQ", "status": "duplicate"}, ...]}
+  ```
+
+  - `applied`: inserted now. `credited` is what it added.
+  - `duplicate`: the account already holds that ref, from an earlier call or earlier in this one. Nothing is added.
+  - `rejected`, with a `reason`: `bad source`, `source not allowed here`, `bad ref`, `bad amount`, `unknown accolade key` or
+    `no such user`. It is permanent: the client drops the entry. A `ref` that is not a string answers `ref: null`.
+  - `deferred`, with `reason` `accolade not recorded yet`: an accolade entry whose accolade the account has not recorded
+    (`user_accolades` count < 1). The client sends it again later. An accolade ref already paid answers `duplicate`, whatever
+    the count reads now.
+- **The entries** (`src/contract/payload.js`; Wobble Planet's client holds the same numbers):
+
+  | source | ref | amount | sent by |
+  |---|---|---|---|
+  | `sp_run` | `run:` + 8-40 of `[A-Za-z0-9_-]` | an integer 1..5000 | a client |
+  | `accolade` | `accolade:<key>`, a `user_accolades` column | 50, 100, 250, 500 or 1000 | a client or a game server |
+  | `carry` | `carry` | an integer 0..100000 | a client |
+  | `legacy_sync` | `legacy:` + 24 hex | the brain's own (the single-player sync, below) | nobody |
+
+  A ref is at most 64 characters. `carry` brings an install's balance to an account that was not tracking it (a new account,
+  or a signed-in install's first contact after updating). It credits `max(0, amount - the balance at its place in the
+  batch)`, once per account, ever; a carry of 0 is applied and its row written all the same. The client leads its batch with
+  it and sends its shown balance less its pending entries.
+- **`POST /internal/v1/payload/credit`** `{user_id, entries}`, on the internal listener: a game server credits a seated
+  player's paid multiplayer firsts. `VALIDATION` for a bad `user_id` or entries; `VALIDATION` (403) for a player with no seat
+  in the calling lobby, as `/match/accolades`. Only `accolade` entries: any other source is `rejected`, `source not allowed
+  here`. A deleted account answers ok `{balance: 0, earned_alltime: 0, entries: [...]}` with every entry rejected, `no such
+  user`. Otherwise the answer is the v1 route's.
+- **One transaction per call** (`applyPayloadEntries`, `src/storage/payloadLedger.js`). It locks the `users` row (shared)
+  and the `user_stats` row (for update) in the order account deletion takes them, so a delete racing a credit waits for it.
+  Each entry is inserted (a duplicate key is `duplicate`), and `user_stats` is written once. **`_last_updated` is left as it
+  was** (`_last_updated = _last_updated`): the column is `ON UPDATE current_timestamp()`, and a restamp would make the
+  brain's row newer than a client's save and refuse that client's next single-player sync of its sp_ columns.
+- **An older build's single-player sync.** Play 0.2.0 and earlier send `currency_amount` / `currency_earned_alltime` as
+  absolute values. When the client's stamp wins (today's rule), each is written as `GREATEST(current, sent)`, never lower, so
+  an absolute sync cannot erase a server credit. Any rise is one `legacy_sync` row in the same transaction: its `amount` is
+  `currency_amount`'s rise, 0 when only the all-time total rose. The ledger build sends neither key. Everything else about the
+  sync is unchanged. The branch can go once the alpha floor is past 0.2.0.
+- **A wager must go through the ledger.** `/internal/v1/match/results`' `currencyDelta` (the unbuilt wager, always 0 today)
+  still adds to `currency_amount` directly, outside it.
+- **The log:** `[payload] user <id> (client|server): <n> applied, <n> duplicate, <n> rejected, <n> deferred; balance <n>`
+  for each call that sends entries (an empty read has only its request line), and `[payload] user <id>: a legacy
+  single-player sync raised the balance by <n> (<ref>)`.
+- **To see an account's:** `SELECT ref, source, amount, balance_after, created_at FROM payload_ledger WHERE user_id = <id>
+  ORDER BY id`. The account's delete and the guest cull take its rows (`USER_TABLES`, and the foreign key cascades); the dev
+  scrub keeps them.
+
+**Tests.** `test/payload_contract.test.js` (the entry rules, no database), `test/payload_http.test.js` (both routes' checks
+in order and their answers, no database) and `test/payload.db.test.js`, with `RJ_TEST_DB`: 0009, each status, a batch
+resent and sent three times at once, carry, the stamp, the legacy sync, the internal route, one transaction, every balance
+against its rows, and the delete and the cascade. `test/account_delete.db.test.js`, `test/guests.db.test.js` and
+`ops/db/test/scrub_snapshot.sh` hold ledger rows too.
+
 ## Matchmaking (RJ 466, spec M4)
 
 A new environment matches players through `POST /v1/match/join` and `/v1/queue/:ticket`, hands each a **join
@@ -338,6 +409,8 @@ heartbeated: a process carrying `--lobby_id=` that runs a binary under `SERVERS_
 heartbeat). `match/results` takes today's array and answers `{players, ignored_user_ids}`: `players` is today's
 `data` (each player's new all-time stats), for the players who took a seat in this lobby; the rest are ignored.
 `match/accolades` answers `{user_accolades, ignored_keys}`, or `VALIDATION` (403) for a player with no seat.
+`payload/credit` (RJ 587) answers `{balance, earned_alltime, entries}`, likewise only for a seated player, and takes only
+`accolade` entries ("The payload ledger (RJ 587)").
 
 **Invite links** add a fourth mode, `join_user`, and a second ticket kind, `follow`: see "Invite links (RJ 458)".
 
@@ -426,9 +499,10 @@ A scrub, in one transaction, table by table:
   forwarder can never send a copied one to the sheet. In place, the scrub deletes dev's own feedback too: rows
   `sent` are on the sheet already, it warns of any still `pending`, and it refuses while any is `anon_pending` (the
   sheet names a deleted account until the forwarder rewrites that row).
-- **Kept as they are:** `user_stats`, `user_accolades`, `user_accolades_time_earned`, `user_player_card` and
-  `schema_migrations` hold numbers, times, an accolade key and the migrations' names, keyed by the `user_id` the
-  `users` step has made anonymous.
+- **Kept as they are:** `user_stats`, `user_accolades`, `user_accolades_time_earned`, `user_player_card`,
+  `payload_ledger` (RJ 587) and `schema_migrations` hold numbers, times, an accolade key, the ledger's game-made entry ids
+  and sources, and the migrations' names, keyed by the `user_id` the `users` step has made anonymous. Emptying the
+  ledger would leave dev's balances no longer its sum and let an account's carry pay twice.
 
 **Nothing new slips through.** The script names every table in its "Every table" block. Before it copies or changes
 anything, PLAN included, it fails on a table it does not name, a `users` column it does not name, or a string column
@@ -522,16 +596,16 @@ contract is Wobble Planet `docs/backend-accounts.md`, "Account deletion (RJ 473)
   ignored. It is not a multiplayer route (the multiplayer floor and maintenance never block it) and has no admission.
   ok: `{}`.
 - **One transaction** (`deleteUser(uid, {db})`, `src/storage/users.js`; it runs outside a request too) deletes the
-  user's rows in `user_credentials` (every device), `user_player_card`, `user_accolades_time_earned`, `user_accolades`,
-  `user_stats` (the leaderboard entries with it) and `users`, and anonymises the account's feedback, which is kept
+  user's rows in `payload_ledger` (RJ 587), `invites`, `user_credentials` (every device), `user_player_card`,
+  `user_accolades_time_earned`, `user_accolades`, `user_stats` (the leaderboard entries with it) and `users`, and anonymises the account's feedback, which is kept
   (`anonymizeFeedbackForUser`; the sheet's Player cell follows). Then the match registry drops the uid's reserved seats
   and waiting tickets; a player seated in a running match plays on. The username and email are free again.
 - **The log** gets one line, `[account] user <id> deleted`: never the name, the email or the password.
 - **Nothing brings it back.** A session is stateless and lives up to an hour after the delete:
-  `/v1/me/sp-stats/sync`, `/v1/me/accolades/sync` and `PUT /v1/me/player-card` check the account first and answer
-  `AUTH_INVALID`, writing nothing, as `/v1/match/join` does. The internal API ignores a deleted uid: `/match/results`
-  lists it in `ignored_user_ids`; `/match/accolades` answers ok with `user_accolades: {}` and every key in
-  `ignored_keys`. Every credential restore is `AUTH_INVALID` (scope `account`), so the other devices sign out.
+  `/v1/me/sp-stats/sync`, `/v1/me/accolades/sync`, `/v1/me/payload/credit` and `PUT /v1/me/player-card` check the
+  account first and answer `AUTH_INVALID`, writing nothing, as `/v1/match/join` does. The internal API ignores a deleted
+  uid: `/match/results` lists it in `ignored_user_ids`; `/match/accolades` answers ok with `user_accolades: {}` and every
+  key in `ignored_keys`; `/payload/credit` answers ok with balance 0 and every entry rejected, `no such user`. Every credential restore is `AUTH_INVALID` (scope `account`), so the other devices sign out.
   `GET /v1/users/<id>/...` answers as for an id that never existed, and the leaderboards drop it. Feedback sent with
   the old session is stored as anonymous.
 - **To see that it happened:** `SELECT COUNT(*) FROM users WHERE user_id = <id>` is 0, and the account's feedback rows
