@@ -22,6 +22,9 @@
 #                      never send a copied row to the sheet when there is none
 #   invites            every row deleted (RJ 458): each is a live link to an account, and a copied one would let
 #                      anyone holding it follow that account's dev twin
+#   payload_ledger     kept (RJ 587): each row is a payload change (numbers and a time) with its source and an entry
+#                      id the game made (run:<random>, accolade:<key>, carry, legacy:<random>), nothing a player
+#                      typed. Emptying it would leave dev's balances no longer the ledger's sum, and let a carry pay twice
 #   the rest           kept as they are: stats, accolades, the player card and schema_migrations hold numbers and
 #                      times only (and the string columns KEEP_STRINGS names), keyed by a user_id made anonymous above
 # Safe to re-run: a scrubbed database scrubs to itself.
@@ -52,10 +55,10 @@ DEV_HASH='$2b$10$HSHyJmHlrYq1975Uw.uPwegf10x2dJ2M7oJ.HArYmWSr2DcT90KHq'
 # what the scrub does to it. A new table goes in one of the lists, with the header above saying why; a new users
 # column goes in USERS_COLUMNS once the users step scrubs it, or needs no scrub.
 EMPTY_TABLES="user_credentials feedback invites"
-KEEP_TABLES="user_stats user_accolades user_accolades_time_earned user_player_card schema_migrations"
+KEEP_TABLES="user_stats user_accolades user_accolades_time_earned user_player_card payload_ledger schema_migrations"
 USERS_COLUMNS="user_id username email password access_token is_guest last_login created_date"
 # The only columns of a kept table that may hold anything but a number or a time.
-KEEP_STRINGS="user_player_card.equipped_accolade_key schema_migrations.name schema_migrations.checksum"
+KEEP_STRINGS="user_player_card.equipped_accolade_key payload_ledger.ref payload_ledger.source schema_migrations.name schema_migrations.checksum"
 NUMBERS_AND_TIMES="'tinyint','smallint','mediumint','int','bigint','decimal','float','double','bit','year','date','time','datetime','timestamp'"
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d'; }

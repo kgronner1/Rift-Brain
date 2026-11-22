@@ -11,6 +11,9 @@
 //   POST /internal/v1/match/accolades      {user_id, accolades}       likewise
 //     An account deleted meanwhile (RJ 473) is ignored by both: results list it in ignored_user_ids; accolades answer
 //     ok with user_accolades {} and every key in ignored_keys. Nothing is written for it.
+//   POST /internal/v1/payload/credit       {user_id, entries}         likewise (RJ 587): a seated player's paid firsts,
+//     accolade entries only (contract/payload.js FROM_SERVER); /v1/me/payload/credit's answer. A deleted account
+//     answers ok with balance 0 and every entry rejected, reason "no such user"; one with no user_stats row, INTERNAL.
 //   GET  /internal/v1/users/:id/accolades
 //   GET  /internal/v1/users/:id/player-card
 // Every response is spec 4.2's envelope. A bad or missing lobby key is AUTH_REQUIRED (401). The lobby key is never
@@ -25,6 +28,7 @@ const { errors } = require('../../middleware/errors');
 const { route, isObject, body, requireUserId } = require('../v1/util');
 const { LOBBY_ID_RE, MAX_PLAYERS } = require('../../match/registry');
 const storage = require('../../storage');
+const { checkEntries } = require('../../contract/payload');
 
 const BODY_LIMIT = '256kb';
 const KEY_RE = /^[0-9a-fA-F]{64}$/;
@@ -99,6 +103,20 @@ function createInternalRouter({ env, match, config = () => ({ messages: {} }), s
     }
     const r = await store.playerAccoladesSync({ user_id: b.user_id, accolades: b.accolades });
     sendOk(res, { user_accolades: r.user_accolades, ignored_keys: r.ignored_keys });
+  }));
+
+  router.post('/payload/credit', route(async (req, res) => {
+    const b = body(req);
+    if (!Number.isInteger(b.user_id) || b.user_id <= 0) fail('VALIDATION', { message: 'Send {user_id, entries}.' });
+    const bad = checkEntries(b.entries);
+    if (bad) fail('VALIDATION', { message: bad });
+    if (!match.verifiedSeat(req.lobbyId, b.user_id)) fail('VALIDATION', { message: 'That player has no seat in this lobby.', status: 403 });
+    if (!(await store.userExists(b.user_id))) {
+      sendOk(res, store.noSuchUserAnswer(b.entries));
+      return;
+    }
+    const r = await store.applyPayloadEntries(b.user_id, b.entries, { from: 'server' });
+    sendOk(res, r || store.noSuchUserAnswer(b.entries));
   }));
 
   // User 0 is "nobody": the global earn rates alone, as /v1/users/0/accolades.

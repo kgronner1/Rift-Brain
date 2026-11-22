@@ -37,8 +37,9 @@ function rateLimited(r) {
 // admission: admission/admission.js's createAdmission(); the caller starts its sweep. Without one, the router makes
 // its own, which is swept only when a test calls sweep(). feedbackStore: tests' stand-in for the feedback table;
 // accountStore: for the account reads and the delete behind /v1/me (RJ 473); credentialStore: for the revoke behind
-// /v1/session/revoke (RJ 506); inviteStore: for the invites table (RJ 458).
-function createV1Router({ env, remote, now = () => Date.now(), limiter = createRateLimiter({ now }), match = null, findUser, admission, feedbackStore, accountStore, credentialStore, inviteStore }) {
+// /v1/session/revoke (RJ 506); inviteStore: for the invites table (RJ 458); payloadStore: for the payload ledger
+// behind /v1/me/payload/credit (RJ 587).
+function createV1Router({ env, remote, now = () => Date.now(), limiter = createRateLimiter({ now }), match = null, findUser, admission, feedbackStore, accountStore, credentialStore, inviteStore, payloadStore }) {
   if (!env.SESSION_KEY) throw new Error('/v1 needs SESSION_KEY');
   const config = () => remote.current();
   admission = admission || createAdmission({ env, config, now });
@@ -56,7 +57,7 @@ function createV1Router({ env, remote, now = () => Date.now(), limiter = createR
   };
   registerSessionRoutes(router, { ...deps, ...(credentialStore ? { credentials: credentialStore } : {}) });
   registerAccountRoutes(router, deps);
-  registerMeRoutes(router, { ...deps, match, ...(accountStore ? { accounts: accountStore } : {}) });
+  registerMeRoutes(router, { ...deps, match, ...(accountStore ? { accounts: accountStore } : {}), ...(payloadStore ? { payload: payloadStore } : {}) });
   registerUserRoutes(router, deps);
   registerInviteRoutes(router, { ...deps, ...invites });
   if (match) registerMatchRoutes(router, { ...deps, match, ...(findUser ? { findUser } : {}), ...invites });

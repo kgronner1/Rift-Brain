@@ -1,6 +1,6 @@
 'use strict';
 // RJ 473, the account's hard delete, against a real database built from migrations/: DELETE /v1/me removes every
-// per-user row in one transaction and anonymises the account's feedback, the match registry drops its reservation,
+// per-user row (the payload ledger's too, RJ 587) in one transaction and anonymises the account's feedback, the match registry drops its reservation,
 // and nothing brings the account back: the /me writes with a still-valid session, the internal API's results and
 // accolades, another device's credential, the public reads and the leaderboards. Runs only with RJ_TEST_DB set (see
 // migrate.db.test.js); this file uses its own database, <name>_delete.
@@ -19,7 +19,7 @@ const { SESSION_KEY, JOIN_KEY, LOBBY_MASTER_KEY, FP_A, ENV, makeRegistry, beat, 
 const URL_ENV = process.env.RJ_TEST_DB;
 const skip = URL_ENV ? false : 'RJ_TEST_DB is not set';
 const PASSWORD = 'doomed pilot password';
-const TABLES = ['users', 'user_credentials', 'user_player_card', 'user_accolades_time_earned', 'user_accolades', 'user_stats'];
+const TABLES = ['users', 'user_credentials', 'user_player_card', 'user_accolades_time_earned', 'user_accolades', 'user_stats', 'payload_ledger'];
 const MATCH_STATS = {
   currencyDelta: 0, matchOutcome: 1, numJumps: 5, numHits: 0, numMisses: 0, numHitsReceived: 0, numKills: 0,
   numUniquePlayersKilled: 0, numDeaths: 0, numDeathsByOtherPlayers: 0, matchDurationSec: 60, timeSpentAliveSec: 60,
@@ -114,8 +114,9 @@ async function rowsOf(uid) {
   return out;
 }
 
-const ALL_ROWS = (credentials) => ({
+const ALL_ROWS = (credentials, ledger) => ({
   users: 1, user_credentials: credentials, user_player_card: 1, user_accolades_time_earned: 1, user_accolades: 1, user_stats: 1,
+  payload_ledger: ledger,
 });
 const NO_ROWS = Object.fromEntries(TABLES.map((t) => [t, 0]));
 
@@ -161,6 +162,11 @@ test('setup: a doomed account with data everywhere, a second device, feedback, a
   assert.equal(code(await http(ctx.pub, 'POST', '/v1/me/accolades/sync', { headers: me, body: { accolades: { _last_updated: future, Ghost: 3 } } })), 'ok');
   assert.equal((await http(ctx.pub, 'PUT', '/v1/me/player-card', { headers: me, body: { equipped_accolade_key: 'Ghost' } })).body.data.equipped_accolade_key, 'Ghost');
   await q('UPDATE user_stats SET sp_most_jumps_in_a_run = 10 WHERE user_id = ?', [ctx.other.id]);
+  // RJ 587: two payload ledger rows.
+  const paid = await http(ctx.pub, 'POST', '/v1/me/payload/credit', { headers: me, body: { entries: [
+    { ref: 'run:doomed-run-1', source: 'sp_run', amount: 40 }, { ref: 'carry', source: 'carry', amount: 100 },
+  ] } });
+  assert.deepEqual(paid.body.data.entries.map((e) => e.status), ['applied', 'applied']);
 
   // Feedback: one sent through the route (pending), one the sheet already holds (sent), and the bystander's.
   ctx.fbPending = uuid();
@@ -186,7 +192,7 @@ test('setup: a doomed account with data everywhere, a second device, feedback, a
   const mine = [...ctx.doomedSeat.lobby.seats.values()].filter((s) => s.uid === d.id).map((s) => s.status).sort();
   assert.deepEqual(mine, ['reserved', 'seated']);
 
-  assert.deepEqual(await rowsOf(d.id), ALL_ROWS(2));
+  assert.deepEqual(await rowsOf(d.id), ALL_ROWS(2, 2));
   const board = await http(ctx.pub, 'GET', '/v1/leaderboards/sp_most_jumps_in_a_run?limit=5', { headers: headers(d.install) });
   assert.equal(board.body.data.list[0].user_id, d.id, 'the doomed pilot leads the board before the delete (the measurement works)');
 });
@@ -197,7 +203,7 @@ test('a wrong password changes nothing and says so; a missing one is VALIDATION'
   assert.deepEqual([code(wrong), wrong.status, wrong.body.error.message], ['AUTH_INVALID', 401, "That password isn't right."]);
   const missing = await http(ctx.pub, 'DELETE', '/v1/me', { headers: headers(d.install, { token: d.session }), body: {} });
   assert.equal(code(missing), 'VALIDATION');
-  assert.deepEqual(await rowsOf(d.id), ALL_ROWS(2));
+  assert.deepEqual(await rowsOf(d.id), ALL_ROWS(2, 2));
   assert.equal(ctx.lines.some((l) => l.startsWith('[account]')), false);
 });
 
@@ -240,6 +246,7 @@ test('a still-valid session writes nothing: the /me syncs, the player card, a jo
     ['POST', '/v1/me/sp-stats/sync', { stats: { _last_updated: future, sp_most_jumps_in_a_run: 1 } }],
     ['POST', '/v1/me/accolades/sync', { accolades: { _last_updated: future, Ghost: 5 } }],
     ['PUT', '/v1/me/player-card', { equipped_accolade_key: 'Ghost' }],
+    ['POST', '/v1/me/payload/credit', { entries: [{ ref: 'run:doomed-run-2', source: 'sp_run', amount: 5 }] }],
     ['POST', '/v1/match/join', { mode: 'quickplay' }],
   ];
   for (const [method, path, body] of writes) {
@@ -284,6 +291,14 @@ test('the internal API ignores the deleted player\'s results and accolades and r
   assert.deepEqual(acc.body.data, { user_accolades: {}, ignored_keys: ['Ghost'] });
   const accOther = await http(ctx.int, 'POST', '/internal/v1/match/accolades', { headers: ctx.lh, body: { user_id: ctx.other.id, accolades: { _last_updated: 9 } } });
   assert.ok('Ghost' in accOther.body.data.user_accolades, 'a live player\'s accolades still answer the full map');
+
+  // RJ 587: a game server's credit for the deleted player answers every entry rejected, and writes no row.
+  const paid = await http(ctx.int, 'POST', '/internal/v1/payload/credit', { headers: ctx.lh, body: { user_id: d.id, entries: [
+    { ref: 'accolade:Ghost', source: 'accolade', amount: 100 },
+  ] } });
+  assert.deepEqual(paid.body, { result: 'ok', data: { balance: 0, earned_alltime: 0, entries: [
+    { ref: 'accolade:Ghost', status: 'rejected', reason: 'no such user' },
+  ] } });
   assert.deepEqual(await rowsOf(d.id), NO_ROWS);
 });
 
@@ -324,6 +339,10 @@ test('the name and email are free again: a new account takes them, with a new id
 
 test('deleteUser: one transaction (a failure part way leaves every row), false for no such user', { skip }, async () => {
   const victim = ctx.reborn;
+  const paid = await http(ctx.pub, 'POST', '/v1/me/payload/credit', {
+    headers: headers(victim.install, { token: victim.session }), body: { entries: [{ ref: 'run:victim-run-1', source: 'sp_run', amount: 7 }] },
+  });
+  assert.equal(paid.body.data.entries[0].status, 'applied');
   await insertFeedback({
     id: uuid(), received_ms: ctx.m.clock.t, written_at: null, user_id: victim.id, username: victim.username, install_id: null,
     build: 1, platform: 'android', env: 'dev', tags: [], message: 'kept', context: {},
@@ -345,7 +364,7 @@ test('deleteUser: one transaction (a failure part way leaves every row), false f
     },
   };
   await assert.rejects(deleteUser(victim.id, { db: failing }), /feedback write failed/);
-  assert.deepEqual(await rowsOf(victim.id), ALL_ROWS(1));
+  assert.deepEqual(await rowsOf(victim.id), ALL_ROWS(1, 1));
   assert.equal((await q('SELECT COUNT(*) AS n FROM feedback WHERE user_id = ?', [victim.id]))[0].n, 1);
   const restore = await http(ctx.pub, 'POST', '/v1/session', { headers: headers(victim.install), body: { credential: victim.credential } });
   assert.equal(code(restore), 'ok', 'the account still signs in');

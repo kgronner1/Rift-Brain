@@ -7,4 +7,5 @@ module.exports = {
   ...require('./playerCard'),
   ...require('./feedback'),
   ...require('./invites'),
+  ...require('./payloadLedger'),
 };
