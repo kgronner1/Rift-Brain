@@ -488,11 +488,11 @@ test('match results: a credit landing between their read and their write waits f
   const results = await postMatchPlayerStatsUpdate([{ user_id: li.id, stats: { ...MATCH_STATS } }], { db });
   const paid = await state.during;
   assert.equal(state.fired, true, 'the hook found the results\' read (the measurement works)');
-  assert.equal(state.doneInHold, false, 'the credit waited on the row the results locked');
   assert.deepEqual([paid.balance, paid.entries], [600, [{ ref: 'run:li-race-0001', status: 'applied', credited: 100 }]]);
-  assert.equal(results[0].stats.currency_amount.value, 500, 'the results\' answer is from before the credit');
   const t = await totals(li.id);
   assert.deepEqual([t.amount, t.earned], [600, 600], 'the credit was not written over');
+  assert.equal(state.doneInHold, false, 'the credit waited on the row the results locked');
+  assert.equal(results[0].stats.currency_amount.value, 500, 'the results\' answer is from before the credit');
   assert.equal(Number((await q('SELECT mp_num_matches_won_alltime AS n FROM user_stats WHERE user_id = ?', [li.id]))[0].n), wonBefore + 1);
   assert.equal(t.amount, ctx.opening.get(li.id).amount + (await ledger(li.id)).reduce((n, r) => n + r.amount, 0));
 });
@@ -504,10 +504,10 @@ test('match results: a single-player sync landing in between keeps its stamp (th
   const { db, state } = interleaved(RESULTS_READ, () => oldSync(li, { sp_most_jumps_in_a_run: 33 }));
   await postMatchPlayerStatsUpdate([{ user_id: li.id, stats: { ...MATCH_STATS } }], { db });
   const synced = await state.during;
-  assert.equal(state.doneInHold, false, 'the sync\'s write waited on the locked row');
   assert.equal(synced.user_stats.sp_most_jumps_in_a_run, 33);
   const t = await totals(li.id);
   assert.ok(t.stamp > s0 + 86400000, `the sync's restamp stands (${new Date(t.stamp).toISOString()})`);
+  assert.equal(state.doneInHold, false, 'the sync\'s write waited on the locked row');
   assert.equal(t.amount, 600);
   // And the results alone leave the stamp as it was.
   await q("UPDATE user_stats SET _last_updated = '2026-01-02 03:04:05' WHERE user_id = ?", [li.id]);
@@ -524,14 +524,14 @@ test('a legacy sync with a credit landing in its middle: both count, once each, 
   }, { db });
   const paid = await state.during;
   assert.equal(state.fired, true);
-  assert.equal(state.doneInHold, false, 'the credit waited on the legacy sync\'s locked row');
   assert.match(ref, /^legacy:/);
   assert.deepEqual(paid.entries, [{ ref: 'run:mo-race-0001', status: 'applied', credited: 100 }]);
+  assert.deepEqual([(await totals(mo.id)).amount, (await totals(mo.id)).earned], [550, 550], 'the credit was not written over');
   assert.deepEqual(await ledger(mo.id), [
     { ref, source: 'legacy_sync', amount: 150, balance_after: 450 },
     { ref: 'run:mo-race-0001', source: 'sp_run', amount: 100, balance_after: 550 },
   ]);
-  assert.deepEqual([(await totals(mo.id)).amount, (await totals(mo.id)).earned], [550, 550]);
+  assert.equal(state.doneInHold, false, 'the credit waited on the legacy sync\'s locked row');
 
   // The same race from the routes, many times over: the balance is always the opening balance plus the ledger.
   for (let i = 0; i < 6; i++) {
