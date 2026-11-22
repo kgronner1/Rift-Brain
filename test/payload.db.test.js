@@ -504,6 +504,7 @@ test('match results: a single-player sync landing in between keeps its stamp (th
   const { db, state } = interleaved(RESULTS_READ, () => oldSync(li, { sp_most_jumps_in_a_run: 33 }));
   await postMatchPlayerStatsUpdate([{ user_id: li.id, stats: { ...MATCH_STATS } }], { db });
   const synced = await state.during;
+  assert.equal(state.fired, true);
   assert.equal(synced.user_stats.sp_most_jumps_in_a_run, 33);
   const t = await totals(li.id);
   assert.ok(t.stamp > s0 + 86400000, `the sync's restamp stands (${new Date(t.stamp).toISOString()})`);
