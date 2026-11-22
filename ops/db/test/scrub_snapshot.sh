@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Grades ops/db/scrub_snapshot.sh table by table (RJ 511) against MariaDB 10.11 in Docker. rift_brain_dev is built by
 # the brain's own migrate and given what a player leaves in every table: two real accounts, a guest, a device
-# credential each, a signed-in and an anonymous feedback entry, two invites (RJ 458), stats, accolades and a player
-# card. Graded:
+# credential each, a signed-in and an anonymous feedback entry, two invites (RJ 458), stats, accolades, a player
+# card and payload ledger rows (RJ 587). Graded:
 #   - a sweep of every string column of every table finds each of those player details before any scrub (the
 #     sweep's positive control), and none after one
 #   - a copy into a new database is scrubbed, every kept table equal to dev's, and dev is untouched
@@ -55,7 +55,7 @@ db_sum() {
                   FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='$1'")"
   sql -e "CHECKSUM TABLE $list" | sed "s/^$1\.//"
 }
-KEPT="user_stats user_accolades user_accolades_time_earned user_player_card schema_migrations"
+KEPT="user_stats user_accolades user_accolades_time_earned user_player_card payload_ledger schema_migrations"
 kept_sum() {
   local list="" t
   for t in $KEPT; do list="$list${list:+, }\`$1\`.\`$t\`"; done
@@ -95,6 +95,8 @@ INSERT INTO user_stats (user_id, currency_amount, num_jumps_alltime) VALUES (1, 
 INSERT INTO user_accolades (user_id, Beaming, Jumpy) VALUES (1, 3, 1), (4, 1, 0);
 INSERT INTO user_accolades_time_earned (user_id, Beaming) VALUES (1, '2026-10-01 12:00:00');
 INSERT INTO user_player_card (user_id, equipped_accolade_key) VALUES (1, 'Beaming');
+INSERT INTO payload_ledger (user_id, ref, source, amount, balance_after) VALUES
+  (1, 'carry', 'carry', 80, 80), (1, 'run:Kx3_9fQ-a1b2', 'sp_run', 40, 120), (4, 'accolade:Beaming', 'accolade', 7, 7);
 INSERT INTO invites (id, user_id, created_at, expires_at) VALUES
   ('zqinvite23', 1, '2026-10-19 10:00:00.000', '2099-01-01 00:00:00.000'),
   ('zqguest234', 4, '2026-10-19 10:00:00.000', '2026-10-20 10:00:00.000');
@@ -196,6 +198,7 @@ grep -q 'anon_pending\|WARNING' "$WORK/snap.log" && { cat "$WORK/snap.log"; fail
 [ "$(sql -e "SELECT COUNT(*) FROM rj_scrub_snap.users WHERE username = CONCAT('user', user_id) AND email = CONCAT('user', user_id, '@example.invalid')")" = 4 ] \
   || fail "the copy's users: $(sql -e 'SELECT user_id, username, email FROM rj_scrub_snap.users')"
 [ "$(kept_sum rj_scrub_snap)" = "$(kept_sum rift_brain_dev)" ] || fail "the copy's kept tables differ from dev's"
+[ "$(sql -e 'SELECT COUNT(*) FROM rj_scrub_snap.payload_ledger')" = 3 ] || fail "the copy's payload_ledger lost rows"
 [ "$(db_sum rift_brain_dev)" = "$DEV_SUM" ] || fail "copying changed rift_brain_dev"
 pass "dev -> a new database: no player detail in any column, feedback, credentials and invites empty, kept tables as dev's; dev untouched"
 
@@ -218,14 +221,14 @@ grep -q 'PLAN: rewrite email, username and password of 4 users; delete 2 credent
   || { cat "$WORK/plan.log"; fail "the PLAN line"; }
 grep -q "kept as they are (no personal data): ${KEPT// /, }" "$WORK/plan.log" || { cat "$WORK/plan.log"; fail "the kept tables line"; }
 [ "$(db_sum rift_brain_dev)" = "$DEV_SUM" ] || fail "the PLAN changed rift_brain_dev"
-pass "in-place PLAN: names 4 users, 2 credentials, 3 feedback entries, 2 invites and the 5 kept tables, warns of the 1 unsent, changes nothing"
+pass "in-place PLAN: names 4 users, 2 credentials, 3 feedback entries, 2 invites and the 6 kept tables, warns of the 1 unsent, changes nothing"
 
 scrub dev rift_brain_dev --apply >"$WORK/apply.log" 2>&1 || { cat "$WORK/apply.log"; fail "in-place --apply"; }
 [ -z "$(leaks rift_brain_dev)" ] || fail "dev still holds player details in: $(leaks rift_brain_dev | tr '\n' ' ')"
 [ "$(sql -e 'SELECT (SELECT COUNT(*) FROM rift_brain_dev.feedback) + (SELECT COUNT(*) FROM rift_brain_dev.user_credentials) + (SELECT COUNT(*) FROM rift_brain_dev.invites)')" = 0 ] \
   || fail "dev's feedback, user_credentials or invites is not empty"
 [ "$(kept_sum rift_brain_dev)" = "$KEPT_BEFORE" ] || fail "the scrub changed a kept table"
-pass "in place: no player detail in any column of any table; feedback, credentials and invites empty; the 5 kept tables unchanged"
+pass "in place: no player detail in any column of any table; feedback, credentials and invites empty; the 6 kept tables unchanged"
 
 SCRUBBED_SUM="$(db_sum rift_brain_dev)"
 scrub dev rift_brain_dev --apply >"$WORK/again.log" 2>&1 || { cat "$WORK/again.log"; fail "re-run"; }

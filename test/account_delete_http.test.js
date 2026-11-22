@@ -172,6 +172,7 @@ test('the /me writes answer AUTH_INVALID for a session whose account is gone, be
     ['POST', '/v1/me/sp-stats/sync', { stats: { _last_updated: NOW_SEC, sp_most_jumps_in_a_run: 5 } }],
     ['POST', '/v1/me/accolades/sync', { accolades: { _last_updated: NOW_SEC, Ghost: 1 } }],
     ['PUT', '/v1/me/player-card', { equipped_accolade_key: 'Ghost' }],
+    ['POST', '/v1/me/payload/credit', { entries: [{ ref: 'run:abcdefgh', source: 'sp_run', amount: 5 }] }],
   ];
   for (const [method, path, body] of writes) {
     const r = await call(method, path, { uid: 9, body });
@@ -179,7 +180,7 @@ test('the /me writes answer AUTH_INVALID for a session whose account is gone, be
   }
   // With the account there, the same calls get past the check into storage (INTERNAL: no database here).
   for (const [method, path, body] of writes) assert.equal(code(await call(method, path, { body })), 'INTERNAL', path);
-  assert.deepEqual(accounts.calls.map(([op, uid]) => `${op} ${uid}`), ['exists 9', 'exists 9', 'exists 9', 'exists 7', 'exists 7', 'exists 7']);
+  assert.deepEqual(accounts.calls.map(([op, uid]) => `${op} ${uid}`), [...Array(4).fill('exists 9'), ...Array(4).fill('exists 7')]);
 });
 
 test('RJ 493: a guest deletes with no password; one sent is ignored, never checked', async (t) => {

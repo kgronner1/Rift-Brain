@@ -99,7 +99,7 @@ async function q(sql, params = []) {
 
 async function rowCounts(uid) {
   const out = {};
-  for (const t of ['users', 'user_credentials', 'user_player_card', 'user_accolades_time_earned', 'user_accolades', 'user_stats']) {
+  for (const t of ['users', 'user_credentials', 'user_player_card', 'user_accolades_time_earned', 'user_accolades', 'user_stats', 'payload_ledger']) {
     out[t] = Number((await q(`SELECT COUNT(*) AS n FROM ${t} WHERE user_id = ?`, [uid]))[0].n);
   }
   return out;
@@ -133,7 +133,7 @@ test('POST /v1/accounts {guest: true}: a Pilot-NNNN with no email or password, i
   assert.deepEqual([u.username, u.email, u.password, u.is_guest], [g.username, null, null, 1]);
   assert.ok(u.last_login && u.created_date);
   assert.deepEqual(await rowCounts(g.id), {
-    users: 1, user_credentials: 1, user_player_card: 1, user_accolades_time_earned: 1, user_accolades: 1, user_stats: 1,
+    users: 1, user_credentials: 1, user_player_card: 1, user_accolades_time_earned: 1, user_accolades: 1, user_stats: 1, payload_ledger: 0,
   });
   const [c] = await q('SELECT token_hash FROM user_credentials WHERE user_id = ?', [g.id]);
   assert.equal(c.token_hash, crypto.createHash('sha256').update(g.credential.token).digest('hex'));
@@ -270,9 +270,12 @@ test('leaderboards leave guests out: the list, the rank and `user`; an upgraded 
 
 test('DELETE /v1/me: a guest needs no password, and is gone', { skip }, async () => {
   const g = await newGuest();
+  const paid = await call('POST', '/v1/me/payload/credit', { token: g.session, body: { entries: [{ ref: 'carry', source: 'carry', amount: 30 }] } });
+  assert.deepEqual(paid.body.data.entries, [{ ref: 'carry', status: 'applied', credited: 30 }], 'RJ 587: a guest has a ledger too');
+  assert.equal((await rowCounts(g.id)).payload_ledger, 1);
   const r = await call('DELETE', '/v1/me', { token: g.session, body: {} });
   assert.deepEqual(r.body, { result: 'ok', data: {} });
-  assert.deepEqual(Object.values(await rowCounts(g.id)), [0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(Object.values(await rowCounts(g.id)), [0, 0, 0, 0, 0, 0, 0]);
   assert.ok(ctx.lines.includes(`[account] user ${g.id} deleted`));
   assert.equal(code(await call('DELETE', '/v1/me', { token: ctx.ace.session, body: {} })), 'VALIDATION', 'an account with a login still needs it');
 });
@@ -288,6 +291,8 @@ test('the cull: idle guests go; recent activity of any kind, a seat or ticket, o
   const recentLogin = await newGuest();
   const holdsTicket = await newGuest();
   const fresh = await newGuest();
+  const paid = await call('POST', '/v1/me/payload/credit', { token: idle.session, body: { entries: [{ ref: 'run:idle-guest-1', source: 'sp_run', amount: 12 }] } });
+  assert.equal(paid.body.data.entries[0].status, 'applied');
   for (const g of [idle, idle2, recentRestore, recentLogin, holdsTicket]) await backdate(g.id, 8);
   await backdate(ctx.ace.id, 30);
   await q('UPDATE user_credentials SET last_used_at = NOW() - INTERVAL 2 DAY WHERE user_id = ?', [recentRestore.id]);
@@ -310,7 +315,7 @@ test('the cull: idle guests go; recent activity of any kind, a seat or ticket, o
   for (const g of [idle, idle2]) assert.equal(left.has(g.id), false, `idle guest ${g.id}`);
   for (const id of older) assert.equal(left.has(id), false, `older guest ${id}`);
   for (const g of [recentRestore, recentLogin, holdsTicket, fresh, ctx.ace, ctx.upgraded]) assert.equal(left.has(g.id), true, g.username);
-  assert.deepEqual(Object.values(await rowCounts(idle.id)), [0, 0, 0, 0, 0, 0], 'through the account deletion: every row');
+  assert.deepEqual(Object.values(await rowCounts(idle.id)), [0, 0, 0, 0, 0, 0, 0], 'through the account deletion: every row');
   assert.deepEqual(await cull.sweep(), { culled: 0, held: 1 }, 'nothing more to cull');
 
   ctx.view.server.guest_cull_days = 1;
