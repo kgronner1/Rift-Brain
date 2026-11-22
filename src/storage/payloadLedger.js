@@ -30,17 +30,17 @@ function noSuchUserAnswer(entries) {
   };
 }
 
-// The user's two totals, locked for this transaction ({amount, earned}, NULLs read as 0), or null when the account
-// or its user_stats row is gone.
+// The user's two totals, locked for this transaction: {amount, earned} (NULLs read as 0), or {missing: 'user'} when
+// the account is gone, or {missing: 'stats'} when it has no user_stats row.
 async function lockTotals(conn, userId) {
   const [users] = await conn.execute('SELECT user_id FROM users WHERE user_id = ? LOCK IN SHARE MODE', [userId]);
-  if (!users.length) return null;
+  if (!users.length) return { missing: 'user' };
   const [rows] = await conn.execute(
     `SELECT COALESCE(currency_amount, 0) AS amount, COALESCE(currency_earned_alltime, 0) AS earned
      FROM user_stats WHERE user_id = ? FOR UPDATE`,
     [userId],
   );
-  if (!rows.length) return null;
+  if (!rows.length) return { missing: 'stats' };
   return { amount: Number(rows[0].amount), earned: Number(rows[0].earned) };
 }
 
@@ -71,7 +71,10 @@ function summary(out) {
 
 // Applies a credit call's entries (already shaped by checkEntries) for user <userId>, in one transaction, in the order
 // sent. from: 'client' (POST /v1/me/payload/credit) or 'server' (POST /internal/v1/payload/credit), which decides
-// the sources allowed. Returns {balance, earned_alltime, entries: [{ref, status, credited?, reason?}]}, one per entry.
+// the sources allowed. Returns {balance, earned_alltime, entries: [{ref, status, credited?, reason?}]}, one per entry;
+// or null when the account is gone (each route answers that its own way). An account with no user_stats row throws,
+// as the single-player sync does: nothing is applied, and the call fails rather than telling the client to drop its
+// entries.
 //   applied     inserted now; credited is what it added (a carry adds max(0, amount - the balance at that point))
 //   duplicate   the account already holds that ref; nothing added
 //   rejected    invalid (reason); the client drops it
@@ -91,10 +94,11 @@ async function applyPayloadEntries(userId, entries, { from = 'client', db = getD
   try {
     await conn.beginTransaction();
     const totals = await lockTotals(conn, userId);
-    if (!totals) {
+    if (totals.missing === 'user') {
       await conn.rollback();
-      return noSuchUserAnswer(entries);
+      return null;
     }
+    if (totals.missing) throw new Error('No matching user stats found.');
     let counts = {};
     if (known.length) {
       const [rows] = await conn.execute(`SELECT ${known.map(quoteColumn).join(', ')} FROM user_accolades WHERE user_id = ?`, [userId]);
@@ -160,7 +164,7 @@ async function applyLegacySpSync(userId, { stats, keys, lastUpdated }, { db = ge
   try {
     await conn.beginTransaction();
     const totals = await lockTotals(conn, userId);
-    const [stale] = totals
+    const [stale] = !totals.missing
       ? await conn.execute('SELECT user_id FROM user_stats WHERE user_id = ? AND UNIX_TIMESTAMP(_last_updated) < ?;', [userId, lastUpdated])
       : [[]];
     if (!stale.length) {

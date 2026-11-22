@@ -183,7 +183,11 @@ async function computeMatchEloUpdates(db, body) {
 
 // updates the players stats after a game
 // multiple plays could be passed
-async function postMatchPlayerStatsUpdate(body) {
+// Each player's read-modify-write is one transaction that locks the rows in the payload ledger's order (users shared,
+// then user_stats for update; RJ 587, storage/payloadLedger.js): every non-sp_ column is written back as an absolute
+// value, so a payload credit, a legacy sync's rise or a single-player sync's stamp landing between the read and the
+// write would otherwise be written over. The row's _last_updated is left as it was. db: a pool (tests pass a stand-in).
+async function postMatchPlayerStatsUpdate(body, { db = getDB() } = {}) {
 
   // body
   // [{user_id: 1, stats: {currencyDelta: -250, matchOutcome: 1, ...}, {user_id: 2, stats: {currencyDelta: 250, matchOutcome: -1, ...}]
@@ -209,8 +213,6 @@ async function postMatchPlayerStatsUpdate(body) {
 
   let response = [];
 
-  const db = getDB();
-
   // Compute ELO rating changes across the whole match up front, so every
   // player's new rating already accounts for the entire lobby before we write
   // per-player stat rows. Empty when ELO can't run (pre-migration, <2 rated).
@@ -223,70 +225,60 @@ async function postMatchPlayerStatsUpdate(body) {
     const user_id = player.user_id;
     let match_stats = player.stats;
 
+    const connection = await db.getConnection();
     try {
+      await connection.beginTransaction();
 
-      const query = `SELECT * FROM user_stats WHERE user_id = ?`;
-      // Fetch the user from the database
-      let [resp] = await db.execute(query, [user_id]);
+      const [users] = await connection.execute('SELECT user_id FROM users WHERE user_id = ? LOCK IN SHARE MODE', [user_id]);
+      const [resp] = users.length
+        ? await connection.execute(`SELECT * FROM user_stats WHERE user_id = ? FOR UPDATE`, [user_id])
+        : [[]];
       const player_stats = resp[0];
 
       if (!player_stats) {
-
         throw new Error('No matching user stats found.');
-
       }
-      else {
 
-        // remove all single player stats and the user_id
-        for (const key in player_stats) {
-          if (key.startsWith('sp_') || key == "user_id") {
-            delete player_stats[key];
-          }
-        }
-
-        // create update statement
-        let updated_player_stats = findUpdatedPlayerStats(match_stats, player_stats);
-
-        // Fold in this player's new ELO (if any). mp_elo_rating flows through
-        // findUpdatedPlayerStats as a normal column, so we just overwrite its
-        // value before the UPDATE statement is built. Guarded so it's a no-op
-        // when the column doesn't exist yet.
-        const new_elo_rating = eloByUser[user_id];
-        if (new_elo_rating !== undefined && updated_player_stats.mp_elo_rating !== undefined) {
-          updated_player_stats.mp_elo_rating.value = new_elo_rating;
-        }
-
-        let update_variables = prepareUpdatePlayerStatsStatement(updated_player_stats);
-
-        try {
-
-          const queryUpdate = `
-            UPDATE user_stats
-            SET ${update_variables.fields}
-            WHERE user_id = ?;
-          `;
-
-          update_variables.values.push(user_id);
-
-          const [result] = await db.execute(queryUpdate, update_variables.values);
-
-          // remove user id and last updated from stats object
-          delete updated_player_stats.user_id;
-          delete updated_player_stats._last_updated;
-
-          response.push({"user_id": user_id, "stats": updated_player_stats});
-
-        } catch (error) {
-
-          log.error('Error updating player stats after match:', error.message);
-          throw error;
-
+      // remove all single player stats, the user_id and the stamp (kept as it is, below)
+      for (const key in player_stats) {
+        if (key.startsWith('sp_') || key == "user_id" || key == "_last_updated") {
+          delete player_stats[key];
         }
       }
+
+      // create update statement
+      let updated_player_stats = findUpdatedPlayerStats(match_stats, player_stats);
+
+      // Fold in this player's new ELO (if any). mp_elo_rating flows through
+      // findUpdatedPlayerStats as a normal column, so we just overwrite its
+      // value before the UPDATE statement is built. Guarded so it's a no-op
+      // when the column doesn't exist yet.
+      const new_elo_rating = eloByUser[user_id];
+      if (new_elo_rating !== undefined && updated_player_stats.mp_elo_rating !== undefined) {
+        updated_player_stats.mp_elo_rating.value = new_elo_rating;
+      }
+
+      let update_variables = prepareUpdatePlayerStatsStatement(updated_player_stats);
+
+      const queryUpdate = `
+        UPDATE user_stats
+        SET ${update_variables.fields}, _last_updated = _last_updated
+        WHERE user_id = ?;
+      `;
+
+      update_variables.values.push(user_id);
+
+      await connection.execute(queryUpdate, update_variables.values);
+      await connection.commit();
+
+      response.push({"user_id": user_id, "stats": updated_player_stats});
 
     } catch (error) {
-        log.error('Error finding player from user_id when updating player stats after match:', error.message);
-        throw error;
+      await connection.rollback();
+      log.error('Error updating player stats after match:', error.message);
+      throw error;
+    } finally {
+      connection.release();
     }
 
   }

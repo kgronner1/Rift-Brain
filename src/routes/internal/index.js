@@ -13,7 +13,7 @@
 //     ok with user_accolades {} and every key in ignored_keys. Nothing is written for it.
 //   POST /internal/v1/payload/credit       {user_id, entries}         likewise (RJ 587): a seated player's paid firsts,
 //     accolade entries only (contract/payload.js FROM_SERVER); /v1/me/payload/credit's answer. A deleted account
-//     answers ok with balance 0 and every entry rejected, reason "no such user".
+//     answers ok with balance 0 and every entry rejected, reason "no such user"; one with no user_stats row, INTERNAL.
 //   GET  /internal/v1/users/:id/accolades
 //   GET  /internal/v1/users/:id/player-card
 // Every response is spec 4.2's envelope. A bad or missing lobby key is AUTH_REQUIRED (401). The lobby key is never
@@ -115,7 +115,8 @@ function createInternalRouter({ env, match, config = () => ({ messages: {} }), s
       sendOk(res, store.noSuchUserAnswer(b.entries));
       return;
     }
-    sendOk(res, await store.applyPayloadEntries(b.user_id, b.entries, { from: 'server' }));
+    const r = await store.applyPayloadEntries(b.user_id, b.entries, { from: 'server' });
+    sendOk(res, r || store.noSuchUserAnswer(b.entries));
   }));
 
   // User 0 is "nobody": the global earn rates alone, as /v1/users/0/accolades.

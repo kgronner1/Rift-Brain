@@ -30,7 +30,8 @@
 // in one transaction in the order sent (storage/payloadLedger.js; the rules are contract/payload.js). Not an array,
 // over 32 or a non-object entry: VALIDATION, checked before any database work, and nothing applied. Each entry's
 // answer is applied (credited), duplicate, rejected (reason) or deferred, in order. Like the syncs: no rate limit, no
-// admission, and AUTH_INVALID for a gone account.
+// admission, AUTH_INVALID for a gone account (a delete that lands after liveAccount's check too), and INTERNAL for an
+// account with no user_stats row, so the client keeps its entries.
 
 const { fail, sendOk } = require('../../contract/envelope');
 const log = require('../../log');
@@ -71,7 +72,9 @@ function registerMeRoutes(router, { requireSession, config, limiter, rateLimited
   };
 
   router.post('/me/payload/credit', requireSession, payloadShape, liveAccount, route(async (req, res) => {
-    sendOk(res, await payload.applyPayloadEntries(req.session.uid, body(req).entries, { from: 'client' }));
+    const r = await payload.applyPayloadEntries(req.session.uid, body(req).entries, { from: 'client' });
+    if (!r) fail('AUTH_INVALID'); // deleted after liveAccount's check
+    sendOk(res, r);
   }));
 
   router.put('/me/player-card', requireSession, liveAccount, route(async (req, res) => {
