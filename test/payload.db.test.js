@@ -3,7 +3,8 @@
 // resent (or sent twice at once) counting once, carry's max(0, sent - balance) once per account, user_stats'
 // _last_updated left as it was, the single-player sync's legacy branch (never lower, each rise journaled), the internal
 // route's seat check and server-only sources, one transaction per call, the account's delete taking its rows, and every
-// balance equal to its opening balance plus its rows. Runs only with RJ_TEST_DB set (see migrate.db.test.js); this file
+// balance equal to its opening balance plus its rows. The races: match results, a legacy sync and two devices' credits,
+// each with a credit (or a single-player sync) landing in the middle, and a delete landing after the account check. Runs only with RJ_TEST_DB set (see migrate.db.test.js); this file
 // uses its own database, <name>_payload.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -14,13 +15,17 @@ const { initDB, getDB } = require('../src/db');
 const { createPublicApp, createInternalApp } = require('../src/app');
 const { createRemoteConfig } = require('../src/config/remote');
 const { verify } = require('../src/auth/tokens');
-const { deleteUser, applyPayloadEntries } = require('../src/storage');
+const { deleteUser, applyPayloadEntries, applyLegacySpSync, postMatchPlayerStatsUpdate } = require('../src/storage');
 const { SESSION_KEY, JOIN_KEY, LOBBY_MASTER_KEY, FP_A, ENV, makeRegistry, beat, lobbyKey, quietLogger } = require('./match_fixture');
 
 const URL_ENV = process.env.RJ_TEST_DB;
 const skip = URL_ENV ? false : 'RJ_TEST_DB is not set';
 const PASSWORD = 'ledger pilot password';
 const ctx = { opening: new Map() };
+const MATCH_STATS = {
+  currencyDelta: 0, matchOutcome: 1, numJumps: 5, numHits: 0, numMisses: 0, numHitsReceived: 0, numKills: 0,
+  numUniquePlayersKilled: 0, numDeaths: 0, numDeathsByOtherPlayers: 0, matchDurationSec: 60, timeSpentAliveSec: 60,
+};
 let seq = 0;
 
 function listen(app) {
@@ -180,12 +185,14 @@ test('0009 makes payload_ledger: its columns, the (user_id, ref) key, the cascad
 });
 
 test('setup: pilots, one holding a balance from before the ledger', { skip }, async () => {
-  for (const name of ['Ann', 'Bo', 'Cy', 'Di', 'Es', 'Fe', 'Gi', 'Hy']) {
+  for (const name of ['Ann', 'Bo', 'Cy', 'Di', 'Es', 'Fe', 'Gi', 'Hy', 'Li', 'Mo', 'Pa']) {
     ctx[name.toLowerCase()] = await signUp(`Ledger_${name}`);
     ctx.opening.set(ctx[name.toLowerCase()].id, { amount: 0, earned: 0 });
   }
   await opening(ctx.ann, 450, 900);
   await opening(ctx.cy, 450, 450);
+  await opening(ctx.li, 500, 500);
+  await opening(ctx.mo, 300, 300);
   assert.deepEqual(await credit(ctx.es, []), { balance: 0, earned_alltime: 0, entries: [] }, 'an empty array reads the balance');
   const read = await credit(ctx.ann, []);
   assert.deepEqual([read.balance, read.earned_alltime], [450, 900]);
@@ -435,6 +442,152 @@ test('a credit is one transaction: a failure part way leaves no row and the tota
   assert.deepEqual(await totals(hy.id), before);
   const ok = await credit(hy, [run('hy-run-0001', 10), run('hy-run-0002', 20)]);
   assert.deepEqual(ok.entries.map((e) => e.status), ['applied', 'applied'], 'nothing was left behind to make them duplicates');
+});
+
+// A pool stand-in for one call: right after the first statement matching `re` returns on one of its connections,
+// `during` starts (another request, on the real pool) and the call is held until `during` settles or holdMs pass. With
+// the rows locked, `during` is still waiting when the call goes on (state.doneInHold false); unlocked, it finishes in the
+// hold and the call then writes over it.
+function interleaved(re, during, holdMs = 500) {
+  const pool = getDB();
+  const state = { fired: false, done: false, doneInHold: null, during: null };
+  const db = {
+    execute: (sql, params) => pool.execute(sql, params),
+    query: (sql, params) => pool.query(sql, params),
+    async getConnection() {
+      const c = await pool.getConnection();
+      const execute = async (sql, params) => {
+        const r = await c.execute(sql, params);
+        if (!state.fired && re.test(sql)) {
+          state.fired = true;
+          state.during = Promise.resolve().then(during);
+          state.during.then(() => { state.done = true; }, () => { state.done = true; });
+          await Promise.race([state.during.catch(() => {}), new Promise((resolve) => setTimeout(resolve, holdMs))]);
+          state.doneInHold = state.done;
+        }
+        return r;
+      };
+      return new Proxy(c, {
+        get(target, key) {
+          if (key === 'execute') return execute;
+          const v = target[key];
+          return typeof v === 'function' ? v.bind(target) : v;
+        },
+      });
+    },
+  };
+  return { db, state };
+}
+
+const RESULTS_READ = /^\s*SELECT \* FROM user_stats WHERE user_id = \?/;
+
+test('match results: a credit landing between their read and their write waits for them, and survives', { skip }, async () => {
+  const li = ctx.li;
+  const wonBefore = Number((await q('SELECT mp_num_matches_won_alltime AS n FROM user_stats WHERE user_id = ?', [li.id]))[0].n);
+  const { db, state } = interleaved(RESULTS_READ, () => credit(li, [run('li-race-0001', 100)]));
+  const results = await postMatchPlayerStatsUpdate([{ user_id: li.id, stats: { ...MATCH_STATS } }], { db });
+  const paid = await state.during;
+  assert.equal(state.fired, true, 'the hook found the results\' read (the measurement works)');
+  assert.equal(state.doneInHold, false, 'the credit waited on the row the results locked');
+  assert.deepEqual([paid.balance, paid.entries], [600, [{ ref: 'run:li-race-0001', status: 'applied', credited: 100 }]]);
+  assert.equal(results[0].stats.currency_amount.value, 500, 'the results\' answer is from before the credit');
+  const t = await totals(li.id);
+  assert.deepEqual([t.amount, t.earned], [600, 600], 'the credit was not written over');
+  assert.equal(Number((await q('SELECT mp_num_matches_won_alltime AS n FROM user_stats WHERE user_id = ?', [li.id]))[0].n), wonBefore + 1);
+  assert.equal(t.amount, ctx.opening.get(li.id).amount + (await ledger(li.id)).reduce((n, r) => n + r.amount, 0));
+});
+
+test('match results: a single-player sync landing in between keeps its stamp (the results never put an older one back)', { skip }, async () => {
+  const li = ctx.li;
+  await q("UPDATE user_stats SET _last_updated = '2026-01-02 03:04:05' WHERE user_id = ?", [li.id]);
+  const s0 = (await totals(li.id)).stamp;
+  const { db, state } = interleaved(RESULTS_READ, () => oldSync(li, { sp_most_jumps_in_a_run: 33 }));
+  await postMatchPlayerStatsUpdate([{ user_id: li.id, stats: { ...MATCH_STATS } }], { db });
+  const synced = await state.during;
+  assert.equal(state.doneInHold, false, 'the sync\'s write waited on the locked row');
+  assert.equal(synced.user_stats.sp_most_jumps_in_a_run, 33);
+  const t = await totals(li.id);
+  assert.ok(t.stamp > s0 + 86400000, `the sync's restamp stands (${new Date(t.stamp).toISOString()})`);
+  assert.equal(t.amount, 600);
+  // And the results alone leave the stamp as it was.
+  await q("UPDATE user_stats SET _last_updated = '2026-01-02 03:04:05' WHERE user_id = ?", [li.id]);
+  await postMatchPlayerStatsUpdate([{ user_id: li.id, stats: { ...MATCH_STATS } }]);
+  assert.equal((await totals(li.id)).stamp, s0);
+});
+
+test('a legacy sync with a credit landing in its middle: both count, once each, and the balance stays the ledger\'s', { skip }, async () => {
+  const mo = ctx.mo;
+  const stamp = ++stampSec;
+  const { db, state } = interleaved(/UNIX_TIMESTAMP\(_last_updated\) < \?/, () => credit(mo, [run('mo-race-0001', 100)]));
+  const ref = await applyLegacySpSync(mo.id, {
+    stats: { currency_amount: 450, currency_earned_alltime: 450, _last_updated: stamp }, keys: ['currency_amount', 'currency_earned_alltime'], lastUpdated: stamp,
+  }, { db });
+  const paid = await state.during;
+  assert.equal(state.fired, true);
+  assert.equal(state.doneInHold, false, 'the credit waited on the legacy sync\'s locked row');
+  assert.match(ref, /^legacy:/);
+  assert.deepEqual(paid.entries, [{ ref: 'run:mo-race-0001', status: 'applied', credited: 100 }]);
+  assert.deepEqual(await ledger(mo.id), [
+    { ref, source: 'legacy_sync', amount: 150, balance_after: 450 },
+    { ref: 'run:mo-race-0001', source: 'sp_run', amount: 100, balance_after: 550 },
+  ]);
+  assert.deepEqual([(await totals(mo.id)).amount, (await totals(mo.id)).earned], [550, 550]);
+
+  // The same race from the routes, many times over: the balance is always the opening balance plus the ledger.
+  for (let i = 0; i < 6; i++) {
+    const sent = (await totals(mo.id)).amount + 40;
+    await Promise.all([oldSync(mo, { currency_amount: sent, currency_earned_alltime: sent + 1000 }), credit(mo, [run(`mo-race-loop-${i}`, 7)])]);
+    const t = await totals(mo.id);
+    assert.equal(t.amount, ctx.opening.get(mo.id).amount + (await ledger(mo.id)).reduce((n, r) => n + r.amount, 0), `round ${i}`);
+  }
+});
+
+test('two devices crediting one account at once, every ref its own: every entry counts', { skip }, async () => {
+  const pa = ctx.pa;
+  const calls = Array.from({ length: 8 }, (_, i) => [run(`pa-dev${i}-a`, 10 + i), run(`pa-dev${i}-b`, 100 + i)]);
+  const answers = await Promise.all(calls.map((entries) => credit(pa, entries)));
+  for (const a of answers) assert.deepEqual(a.entries.map((e) => e.status), ['applied', 'applied']);
+  const sum = calls.flat().reduce((n, e) => n + e.amount, 0);
+  const t = await totals(pa.id);
+  assert.deepEqual([t.amount, t.earned], [sum, sum], 'no call wrote over another\'s');
+  assert.equal(new Set(answers.map((a) => a.balance)).size, 8, 'each call saw the one before it');
+  assert.equal(Math.max(...answers.map((a) => a.balance)), sum);
+  const rows = await ledger(pa.id);
+  assert.deepEqual(rows.map((r) => r.balance_after), rows.map((r, i) => rows.slice(0, i + 1).reduce((n, x) => n + x.amount, 0)));
+});
+
+test('a delete landing after the account check is AUTH_INVALID; an account with no user_stats row fails, keeping its entries', { skip }, async () => {
+  const ni = await signUp('Ledger_Ni');
+  await credit(ni, [run('ni-run-0001', 10)]);
+  const pool = getDB();
+  let fired = false;
+  pool.execute = async function hooked(sql, params) {
+    const r = await Object.getPrototypeOf(pool).execute.call(pool, sql, params);
+    if (!fired && /SELECT 1 AS present FROM users/.test(sql) && params[0] === ni.id) {
+      fired = true;
+      await deleteUser(ni.id);
+    }
+    return r;
+  };
+  let late;
+  try {
+    late = await http(ctx.pub, 'POST', '/v1/me/payload/credit', { headers: headers(ni.install, ni.session), body: { entries: [run('ni-run-0002', 10)] } });
+  } finally {
+    delete pool.execute;
+  }
+  assert.equal(fired, true, 'the delete landed between the check and the ledger');
+  assert.deepEqual([code(late), late.status, late.body.error.scope], ['AUTH_INVALID', 401, 'account']);
+  assert.deepEqual(await ledger(ni.id), []);
+  assert.equal(await applyPayloadEntries(ni.id, [run('ni-run-0003', 10)]), null, 'the ledger says "gone", not an answer');
+
+  const oz = await signUp('Ledger_Oz');
+  await q('DELETE FROM user_stats WHERE user_id = ?', [oz.id]);
+  const broken = await http(ctx.pub, 'POST', '/v1/me/payload/credit', { headers: headers(oz.install, oz.session), body: { entries: [run('oz-run-0001', 10)] } });
+  assert.deepEqual([code(broken), broken.status], ['INTERNAL', 500], 'not ok: the client keeps its entries');
+  await assert.rejects(applyPayloadEntries(oz.id, [acc('Ghost', 100)], { from: 'server' }), /No matching user stats found/);
+  assert.deepEqual(await ledger(oz.id), []);
+  const read = await http(ctx.pub, 'POST', '/v1/me/payload/credit', { headers: headers(oz.install, oz.session), body: { entries: [] } });
+  assert.equal(code(read), 'INTERNAL', 'a read too: no balance to tell');
 });
 
 test('every balance is its opening balance plus its rows; the all-time total likewise for the credit routes', { skip }, async () => {

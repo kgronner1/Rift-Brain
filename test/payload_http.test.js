@@ -2,7 +2,8 @@
 // RJ 587 over HTTP without a database: POST /v1/me/payload/credit and POST /internal/v1/payload/credit. The whole
 // call's checks come before any database work (the session, then the entries' shape, then the account), the answer is
 // the ledger's, a client's entries go as 'client' and a server's as 'server', and the internal route takes only a
-// seated player, answering a deleted one with every entry rejected. The stores are stand-ins; payload.db.test.js
+// seated player, answering a deleted one with every entry rejected. An account the ledger finds gone is AUTH_INVALID
+// on v1; one with no user_stats row (the ledger throws) is INTERNAL on both, so no client drops its entries. The stores are stand-ins; payload.db.test.js
 // drives the real ledger.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -27,12 +28,18 @@ function fakePayload() {
     calls,
     async applyPayloadEntries(uid, entries, opts) {
       calls.push([uid, entries, opts.from]);
+      if (uid === GONE_MID_CALL) return null;
+      if (uid === NO_STATS) throw new Error('No matching user stats found.');
       return { balance: 77, earned_alltime: 99, entries: entries.map((e) => ({ ref: e.ref, status: 'applied', credited: e.amount })) };
     },
   };
 }
 
-function fakeAccounts(live = new Set([7])) {
+// 8: deleted between the account check and the ledger's transaction. 11: an account with no user_stats row.
+const GONE_MID_CALL = 8;
+const NO_STATS = 11;
+
+function fakeAccounts(live = new Set([7, GONE_MID_CALL, NO_STATS])) {
   const calls = [];
   return { calls, live, async userExists(uid) { calls.push(uid); return live.has(uid); } };
 }
@@ -108,6 +115,16 @@ test('/v1/me/payload/credit: an account that is gone is AUTH_INVALID; otherwise 
   assert.deepEqual(accounts.calls, [9, 7, 7]);
 });
 
+test('/v1/me/payload/credit: deleted after the account check is AUTH_INVALID; no user_stats row is INTERNAL', async (t) => {
+  const { call, payload } = await startPublic(t);
+  const gone = await call({ entries: [RUN] }, { uid: GONE_MID_CALL });
+  assert.deepEqual([code(gone), gone.status, gone.body.error.scope], ['AUTH_INVALID', 401, 'account']);
+  const broken = await call({ entries: [RUN] }, { uid: NO_STATS });
+  assert.deepEqual([code(broken), broken.status], ['INTERNAL', 500], 'not ok: the client keeps its entries');
+  assert.equal('data' in broken.body, false);
+  assert.deepEqual(payload.calls.map(([uid]) => uid), [GONE_MID_CALL, NO_STATS]);
+});
+
 async function startInternal(t) {
   const m = makeRegistry({ logger: quietLogger() });
   const store = {
@@ -117,6 +134,8 @@ async function startInternal(t) {
     noSuchUserAnswer,
     async applyPayloadEntries(uid, entries, opts) {
       this.calls.push([uid, entries, opts.from]);
+      if (this.goneMidCall) return null;
+      if (this.noStats) throw new Error('No matching user stats found.');
       return { balance: 150, earned_alltime: 150, entries: entries.map((e) => ({ ref: e.ref, status: 'applied', credited: e.amount })) };
     },
   };
@@ -173,4 +192,14 @@ test('/internal/v1/payload/credit: a seated player whose account is gone gets ev
     { ref: null, status: 'rejected', reason: 'no such user' },
   ] } });
   assert.deepEqual(s.store.calls, [], 'nothing reaches the ledger');
+
+  // Deleted after the existence check, inside the ledger: the same answer. No user_stats row: INTERNAL.
+  s.store.deleted.delete(s.a.uid);
+  s.store.goneMidCall = true;
+  const late = await s.call({ user_id: s.a.uid, entries: [ACC] });
+  assert.deepEqual(late.body.data, { balance: 0, earned_alltime: 0, entries: [{ ref: 'accolade:Ghost', status: 'rejected', reason: 'no such user' }] });
+  s.store.goneMidCall = false;
+  s.store.noStats = true;
+  const broken = await s.call({ user_id: s.a.uid, entries: [ACC] });
+  assert.deepEqual([broken.status, code(broken)], [500, 'INTERNAL']);
 });
