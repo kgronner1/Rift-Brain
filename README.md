@@ -243,8 +243,9 @@ backfill) plus the account's rows. The contract is Wobble Planet's RJ 587 spec, 
 
 - **`POST /v1/me/payload/credit`** 🔒 `{entries: [{ref, source, amount}, ...]}`, 0..32 entries; an empty array reads the
   balance. Not an array, more than 32, or an entry that is not an object: `VALIDATION` before any database work, and nothing
-  is applied. Then `AUTH_INVALID` for a deleted account, as the syncs. No rate limit, no admission, not a multiplayer route.
-  ok, one answer per entry in the order sent:
+  is applied. Then `AUTH_INVALID` for a deleted account, as the syncs (a delete that lands during the call too), and
+  `INTERNAL` for an account with no `user_stats` row: never an ok that would have the client drop its entries. No rate
+  limit, no admission, not a multiplayer route. ok, one answer per entry in the order sent:
 
   ```
   {"balance": 520, "earned_alltime": 1020,
@@ -275,12 +276,17 @@ backfill) plus the account's rows. The contract is Wobble Planet's RJ 587 spec, 
   player's paid multiplayer firsts. `VALIDATION` for a bad `user_id` or entries; `VALIDATION` (403) for a player with no seat
   in the calling lobby, as `/match/accolades`. Only `accolade` entries: any other source is `rejected`, `source not allowed
   here`. A deleted account answers ok `{balance: 0, earned_alltime: 0, entries: [...]}` with every entry rejected, `no such
-  user`. Otherwise the answer is the v1 route's.
+  user`; one with no `user_stats` row, `INTERNAL`. Otherwise the answer is the v1 route's.
 - **One transaction per call** (`applyPayloadEntries`, `src/storage/payloadLedger.js`). It locks the `users` row (shared)
   and the `user_stats` row (for update) in the order account deletion takes them, so a delete racing a credit waits for it.
   Each entry is inserted (a duplicate key is `duplicate`), and `user_stats` is written once. **`_last_updated` is left as it
   was** (`_last_updated = _last_updated`): the column is `ON UPDATE current_timestamp()`, and a restamp would make the
   brain's row newer than a client's save and refuse that client's next single-player sync of its sp_ columns.
+- **Everything else that writes the totals takes the same locks, in the same order.** Match results
+  (`postMatchPlayerStatsUpdate`, one transaction per player) write every non-sp_ column back as an absolute value, so
+  unlocked they would write over a credit or a legacy rise that landed between their read and their write (the ledger row
+  stays, a resend answers `duplicate`, and the payload is lost), and put back the stamp they read over a single-player
+  sync's. They leave `_last_updated` as it was. The legacy sync (below) locks the same way.
 - **An older build's single-player sync.** Play 0.2.0 and earlier send `currency_amount` / `currency_earned_alltime` as
   absolute values. When the client's stamp wins (today's rule), each is written as `GREATEST(current, sent)`, never lower, so
   an absolute sync cannot erase a server credit. Any rise is one `legacy_sync` row in the same transaction: its `amount` is
@@ -298,7 +304,9 @@ backfill) plus the account's rows. The contract is Wobble Planet's RJ 587 spec, 
 **Tests.** `test/payload_contract.test.js` (the entry rules, no database), `test/payload_http.test.js` (both routes' checks
 in order and their answers, no database) and `test/payload.db.test.js`, with `RJ_TEST_DB`: 0009, each status, a batch
 resent and sent three times at once, carry, the stamp, the legacy sync, the internal route, one transaction, every balance
-against its rows, and the delete and the cascade. `test/account_delete.db.test.js`, `test/guests.db.test.js` and
+against its rows, and the delete and the cascade; and the races, each held open at the moment that matters: a credit, and a
+single-player sync, landing between match results' read and write; a credit inside a legacy sync; two devices' credits at
+once; a delete after the account check; an account with no `user_stats` row. `test/account_delete.db.test.js`, `test/guests.db.test.js` and
 `ops/db/test/scrub_snapshot.sh` hold ledger rows too.
 
 ## Matchmaking (RJ 466, spec M4)
