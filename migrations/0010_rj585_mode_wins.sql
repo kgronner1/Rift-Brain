@@ -6,8 +6,9 @@
 --
 -- No backfill: the brain has never kept a match's mode, so every row starts at 0.
 --
--- The three sit after mp_num_matches_won_alltime, so the leaderboard's list of columns shows them beside it. The stats
--- column list is cached for the brain's life, so the brain is restarted after this runs (provision_box.sh restarts it).
+-- The three sit after mp_num_matches_won_alltime in the stats row. They are the accolades' bookkeeping, on no leaderboard
+-- (src/routes/v1/users.js, ACCOLADE_ONLY). The stats column list is cached for the brain's life, so the brain is
+-- restarted after this runs (provision_box.sh restarts it).
 --
 -- ADD COLUMN IF NOT EXISTS (MariaDB 10.0.2+): running it again changes nothing. Nothing here rewrites a row.
 

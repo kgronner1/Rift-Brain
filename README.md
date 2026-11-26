@@ -451,6 +451,9 @@ Wolves at Bay read them, as Ace reads `mp_num_kills_alltime`).
 - **A new mode** needs a key here, a column (a new migration) and the same key in Wobble Planet; until then its wins count
   toward no mode. There is no backfill: the brain never kept a match's mode, so every count began at 0 when 0010 ran.
 - **Guests** count as any account (RJ 493); bots are never reported (they have no account).
+- **Bookkeeping, not a leaderboard** (Alex): the three columns are in the stats row (`GET /v1/users/:id/stats`) and the
+  results' answer, but `GET /v1/stats/columns` leaves them out and `GET /v1/leaderboards/<column>` refuses them
+  (`VALIDATION`), so the client's leaderboard never offers them (`src/routes/v1/users.js`, `ACCOLADE_ONLY`).
 
 **Invite links** add a fourth mode, `join_user`, and a second ticket kind, `follow`: see "Invite links (RJ 458)".
 

@@ -10,6 +10,7 @@ const { createPublicApp } = require('../src/app');
 const { createLobbyRegistry } = require('../src/match/lobbies');
 const { createRemoteConfig, defaultView } = require('../src/config/remote');
 const { verifySession, signSession } = require('../src/auth/tokens');
+const { formatUserStatsColumnName } = require('../src/storage/columns');
 
 const URL_ENV = process.env.RJ_TEST_DB;
 const skip = URL_ENV ? false : 'RJ_TEST_DB is not set';
@@ -317,6 +318,21 @@ test('leaderboards: a known stat column only, the limit clamped to 1..100, the c
     assert.equal(code(await call('GET', `/v1/leaderboards/${bad}`)), 'VALIDATION', bad);
   }
   assert.equal(code(await call('GET', '/v1/leaderboards/sp_most_jumps_in_a_run?user_id=x')), 'VALIDATION');
+});
+
+test('RJ 585: the wins per game mode are on no leaderboard and not in the columns list; every other column still is', { skip }, async () => {
+  const modeWins = ['mp_num_stock_matches_won_alltime', 'mp_num_domination_matches_won_alltime', 'mp_num_time_matches_won_alltime'];
+  const all = (await q(`SELECT COLUMN_NAME AS c FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'user_stats' ORDER BY ORDINAL_POSITION`)).map((r) => r.c);
+  for (const col of modeWins) assert.ok(all.includes(col), `(the measurement: user_stats has ${col})`);
+  const cols = (await call('GET', '/v1/stats/columns')).body.data;
+  assert.deepEqual(cols.columns, all.filter((c) => !modeWins.includes(c)), 'every other column, in the table\'s order');
+  for (const col of modeWins) assert.equal(col in cols.labels, false, col);
+  assert.equal(cols.labels.mp_num_matches_won_alltime, formatUserStatsColumnName('mp_num_matches_won_alltime'));
+  for (const col of modeWins) assert.equal(code(await call('GET', `/v1/leaderboards/${col}`)), 'VALIDATION', col);
+  assert.equal(code(await call('GET', '/v1/leaderboards/mp_num_matches_won_alltime')), 'ok', 'the overall wins still rank');
+  const me = await call('GET', `/v1/users/${ctx.one.id}/stats`);
+  for (const col of modeWins) assert.equal(me.body.data[col], 0, `the stats row still carries ${col}`);
 });
 
 test('credential restores are rate limited per credential, from config', { skip }, async () => {
