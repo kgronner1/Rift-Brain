@@ -116,6 +116,15 @@ npm run migrate -- --status      # list applied and pending, change nothing
 | `0008_rj565_accolades.sql` | 17 accolade columns in both accolade tables; `user_stats.sp_num_rivals_killed_alltime` and `sp_most_rivals_killed_in_a_run` (RJ 565) |
 | `0009_payload_ledger.sql` | the `payload_ledger` table: one row per payload change, unique per (user, entry id), cascading on the user's delete; no backfill (RJ 587) |
 | `0010_rj585_mode_wins.sql` | `user_stats.mp_num_stock_matches_won_alltime`, `mp_num_domination_matches_won_alltime` and `mp_num_time_matches_won_alltime`, after `mp_num_matches_won_alltime`, NOT NULL DEFAULT 0; no backfill (RJ 585) |
+| `0011_rj585_accolades.sql` | 3 accolade columns in both accolade tables: `GlovesOff`, `WolvesatBay`, `WhosHouse` (RJ 585) |
+
+**A new accolade** is a migration and nothing else (0008, 0011): a column named by the client's `Accolade.key` (its title
+less every character but a letter) in `user_accolades` -- `int(10) unsigned NOT NULL DEFAULT 0`, its earn count -- and
+in `user_accolades_time_earned` -- `timestamp NULL DEFAULT NULL`, its first-earned time -- `ADD COLUMN IF NOT EXISTS`.
+Both lists are read from INFORMATION_SCHEMA, the valid keys cached for five minutes. Until the columns exist every sync
+and match report answers the key in `ignored_keys`, and the game server pays no first it cannot see recorded. A
+per-match fact an accolade reads travels in the match's stats, which `findUpdatedPlayerStats()` reads by name and
+otherwise ignores (Who's House?'s hill takes); only a fact kept for all time needs a `user_stats` column (0010).
 
 **Making `0001_baseline.sql`** (once, by hand, on the box). Over SSH:
 

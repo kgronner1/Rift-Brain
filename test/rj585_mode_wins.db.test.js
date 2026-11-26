@@ -66,7 +66,7 @@ test.before(async () => {
   const [[row]] = await c.query(`SELECT ${WON} AS won FROM user_stats WHERE user_id = ?`, [ctx.early.user_id]);
   ctx.earlyWon = row.won;
   const r = await migrate(c, { log: () => {} });
-  assert.deepEqual(r.applied, [MIGRATION]);
+  assert.equal(r.applied[0], MIGRATION, `0010 is the first left to apply: ${r.applied.join(', ')}`);
 
   ctx.a = await createAccount({ username: 'stockpilot', email: 'a@example.test', password: 'password one' }, { platform: 'android', installId: 'i-a' });
   ctx.b = await createAccount({ username: 'hillpilot', email: 'b@example.test', password: 'password two' }, { platform: 'android', installId: 'i-b' });
