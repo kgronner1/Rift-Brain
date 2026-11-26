@@ -3,7 +3,8 @@
 //   GET /v1/users/:id/stats         -> the stats row
 //   GET /v1/users/:id/accolades     -> the accolades map
 //   GET /v1/users/:id/player-card   -> {user_id, equipped_accolade_key}
-//   GET /v1/stats/columns           -> {columns, labels}
+//   GET /v1/stats/columns           -> {columns, labels}   the leaderboards' columns: every user_stats column but the
+//     accolades' own bookkeeping (RJ 585: the per-mode win counts, ACCOLADE_ONLY)
 //   GET /v1/leaderboards/:field     ?limit= (1..100, default 25) &user_id=  -> {list, user}
 //     Guests (RJ 493) are on no leaderboard: not in the list, not counted in a rank, and `user` is null for one.
 
@@ -13,12 +14,17 @@ const {
   getUserStatsColumns, formatUserStatsColumnName, loadUserStatsColumns, quoteColumn, getUserAccolades, getPlayerCard,
 } = require('../../storage');
 const { route, requireUserId, parseUserId } = require('./util');
+const { MODE_WIN_COLUMNS } = require('../../contract/matchModes');
 
 const LIMIT_DEFAULT = 25;
 const LIMIT_MIN = 1;
 const LIMIT_MAX = 100;
-// Leaderboards rank the stat columns, never the row's own bookkeeping.
-const NOT_RANKED = new Set(['user_id', '_last_updated']);
+// RJ 585 (Alex): the wins per game mode (0010) are kept for the lifetime accolades that read them (Gloves Off, Wolves
+// at Bay), not to rank players by: no leaderboard, and not in the columns list the client's leaderboard offers. The
+// stats row (GET /v1/users/:id/stats) still carries them.
+const ACCOLADE_ONLY = new Set(Object.values(MODE_WIN_COLUMNS));
+// Leaderboards rank the stat columns, never the row's own bookkeeping, nor the accolades'.
+const NOT_RANKED = new Set(['user_id', '_last_updated', ...ACCOLADE_ONLY]);
 
 function clampLimit(raw) {
   if (raw === undefined || raw === '') return LIMIT_DEFAULT;
@@ -63,7 +69,7 @@ function registerUserRoutes(router) {
   }));
 
   router.get('/stats/columns', route(async (req, res) => {
-    const columns = await getUserStatsColumns();
+    const columns = (await getUserStatsColumns()).filter((column) => !ACCOLADE_ONLY.has(column));
     const labels = {};
     for (const column of columns) labels[column] = formatUserStatsColumnName(column);
     sendOk(res, { columns, labels });
@@ -106,4 +112,4 @@ function registerUserRoutes(router) {
   }));
 }
 
-module.exports = { registerUserRoutes, clampLimit, rankList };
+module.exports = { registerUserRoutes, clampLimit, rankList, ACCOLADE_ONLY };

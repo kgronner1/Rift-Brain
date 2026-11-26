@@ -115,6 +115,16 @@ npm run migrate -- --status      # list applied and pending, change nothing
 | `0007_invites.sql` | the `invites` table: one row per invite link, cascading on the user's delete (RJ 458) |
 | `0008_rj565_accolades.sql` | 17 accolade columns in both accolade tables; `user_stats.sp_num_rivals_killed_alltime` and `sp_most_rivals_killed_in_a_run` (RJ 565) |
 | `0009_payload_ledger.sql` | the `payload_ledger` table: one row per payload change, unique per (user, entry id), cascading on the user's delete; no backfill (RJ 587) |
+| `0010_rj585_mode_wins.sql` | `user_stats.mp_num_stock_matches_won_alltime`, `mp_num_domination_matches_won_alltime` and `mp_num_time_matches_won_alltime`, after `mp_num_matches_won_alltime`, NOT NULL DEFAULT 0; no backfill (RJ 585) |
+| `0011_rj585_accolades.sql` | 3 accolade columns in both accolade tables: `GlovesOff`, `WolvesatBay`, `WhosHouse` (RJ 585) |
+
+**A new accolade** is a migration and nothing else (0008, 0011): a column named by the client's `Accolade.key` (its title
+less every character but a letter) in `user_accolades` -- `int(10) unsigned NOT NULL DEFAULT 0`, its earn count -- and
+in `user_accolades_time_earned` -- `timestamp NULL DEFAULT NULL`, its first-earned time -- `ADD COLUMN IF NOT EXISTS`.
+Both lists are read from INFORMATION_SCHEMA, the valid keys cached for five minutes. Until the columns exist every sync
+and match report answers the key in `ignored_keys`, and the game server pays no first it cannot see recorded. A
+per-match fact an accolade reads travels in the match's stats, which `findUpdatedPlayerStats()` reads by name and
+otherwise ignores (Who's House?'s hill takes); only a fact kept for all time needs a `user_stats` column (0010).
 
 **Making `0001_baseline.sql`** (once, by hand, on the box). Over SSH:
 
@@ -414,21 +424,48 @@ heartbeated: a process carrying `--lobby_id=` that runs a binary under `SERVERS_
 **The internal API's answers** are the 4.2 envelope. A missing or wrong lobby key is `AUTH_REQUIRED` (401).
 `heartbeat`, `player-joined` and `player-left` answer `{}`; `player-joined` for a seat that is not that player's is
 `VALIDATION` (409), and any call but a heartbeat from a lobby the brain does not know is `LOBBY_NOT_FOUND` (send a
-heartbeat). `match/results` takes today's array and answers `{players, ignored_user_ids}`: `players` is today's
-`data` (each player's new all-time stats), for the players who took a seat in this lobby; the rest are ignored.
+heartbeat). `match/results` takes today's array, each entry optionally naming the match's mode (RJ 585, below), and answers
+`{players, ignored_user_ids}`: `players` is today's `data` (each player's new all-time stats), for the players who took a
+seat in this lobby; the rest are ignored, and so is everything a private lobby sends.
 `match/accolades` answers `{user_accolades, ignored_keys}`, or `VALIDATION` (403) for a player with no seat.
 `payload/credit` (RJ 587) answers `{balance, earned_alltime, entries}`, likewise only for a seated player, and takes only
 `accolade` entries ("The payload ledger (RJ 587)").
+
+**Wins per game mode (RJ 585).** Each `match/results` entry may name the match's game mode: `{user_id, stats, mode}`,
+`mode` one of `stock`, `domination`, `time` (`src/contract/matchModes.js`; Wobble Planet's `GameConfig.modeKey()`, the
+Mode enum's own words lower-cased, never an on-screen label). A WIN (`matchOutcome` 1, the same test that adds to
+`mp_num_matches_won_alltime`; a tie for 1st is a draw) adds one to that mode's column in the same write: `mp_num_stock_matches_won_alltime`,
+`mp_num_domination_matches_won_alltime`, `mp_num_time_matches_won_alltime` (`migrations/0010`). The answer's `players`
+carry the new counts, so the match that reaches a lifetime accolade's number can award it (Wobble Planet's Gloves Off and
+Wolves at Bay read them, as Ace reads `mp_num_kills_alltime`).
+
+- **No mode** (a game server before RJ 585: wire 13 and older) is today's report, taken as it always was: the win counts
+  toward `mp_num_matches_won_alltime` and toward no mode. So is a `mode` that is not one of the three keys exactly (another
+  case, another type, a mode this brain does not know yet): never an error, so a match's stats are never lost over it.
+- **The log:** `[match] lobby <id>: results for <n> seated player(s), mode <stock|domination|time|none named>`, a value
+  the brain does not count shown as `"<value>" (not a mode the brain counts)`.
+- **A private lobby's results are ignored** (RJ 498: a private match is an exhibition and earns no stats). Its game server
+  never reports one; should it, the brain answers ok `{players: [], ignored_user_ids: [...every entry's id]}`, writes
+  nothing and logs `[match] lobby <id>: results from a private lobby ignored (<n> entries)`. A lobby is private when it was
+  spawned for `create_private`, or adopted from a heartbeat naming its `private_code`.
+- **A new mode** needs a key here, a column (a new migration) and the same key in Wobble Planet; until then its wins count
+  toward no mode. There is no backfill: the brain never kept a match's mode, so every count began at 0 when 0010 ran.
+- **Guests** count as any account (RJ 493); bots are never reported (they have no account).
+- **Bookkeeping, not a leaderboard** (Alex): the three columns are in the stats row (`GET /v1/users/:id/stats`) and the
+  results' answer, but `GET /v1/stats/columns` leaves them out and `GET /v1/leaderboards/<column>` refuses them
+  (`VALIDATION`), so the client's leaderboard never offers them (`src/routes/v1/users.js`, `ACCOLADE_ONLY`).
 
 **Invite links** add a fourth mode, `join_user`, and a second ticket kind, `follow`: see "Invite links (RJ 458)".
 
 **Tests.** `test/manifest.test.js`, `test/match_registry.test.js`, `test/match_http.test.js` (every
 `/v1/match/join` outcome), `test/spectate_registry.test.js` (RJ 539: the `admits_spectators` gate, mid-match seats for
 each kind of join, quickplay's order), `test/internal_http.test.js` (the lobby key, adoption after a restart, the seat
-checks)
+checks, RJ 585's mode reaching storage and a private lobby's results ignored)
 `test/match_host.test.js` (a real spawn and UDP test), `test/crash_loop.test.js` (the breaker) and
 `test/server_crash_guards.test.js` (a real spawn's core limit, its exit and its log; the log cap) need no database; `test/internal.db.test.js` writes match
-results against one.
+results against one, and `test/rj585_mode_wins.db.test.js` the per-mode wins: 0010, a STOCK, DOMINATION and TIME win, a
+loss, a draw, no mode, an unknown mode, the answer of the match that reaches ten, a private lobby's report. The pure
+rules are in `test/stats.test.js`.
 
 
 ## Admission queue (RJ 468, spec M6)

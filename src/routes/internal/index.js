@@ -7,7 +7,9 @@
 //                                           admits_spectators}   the last optional (RJ 539; absent: false)
 //   POST /internal/v1/lobby/player-joined  {user_id, seat}
 //   POST /internal/v1/lobby/player-left    {user_id, seat}
-//   POST /internal/v1/match/results        [{user_id, stats}, ...]   only users who took a seat in this lobby
+//   POST /internal/v1/match/results        [{user_id, stats, mode}, ...]   only users who took a seat in this lobby; mode
+//     (RJ 585) is the match's game mode, contract/matchModes.js -- absent from an older server, and then, or when it is
+//     not a known key, the match counts toward no mode. A private lobby's results are ignored (RJ 498).
 //   POST /internal/v1/match/accolades      {user_id, accolades}       likewise
 //     An account deleted meanwhile (RJ 473) is ignored by both: results list it in ignored_user_ids; accolades answer
 //     ok with user_accolades {} and every key in ignored_keys. Nothing is written for it.
@@ -29,6 +31,8 @@ const { route, isObject, body, requireUserId } = require('../v1/util');
 const { LOBBY_ID_RE, MAX_PLAYERS } = require('../../match/registry');
 const storage = require('../../storage');
 const { checkEntries } = require('../../contract/payload');
+const { matchModeOf } = require('../../contract/matchModes');
+const log = require('../../log');
 
 const BODY_LIMIT = '256kb';
 const KEY_RE = /^[0-9a-fA-F]{64}$/;
@@ -71,16 +75,31 @@ function createInternalRouter({ env, match, config = () => ({ messages: {} }), s
 
   router.post('/match/results', route(async (req, res) => {
     if (!Array.isArray(req.body) || req.body.length > 4 * MAX_PLAYERS) fail('VALIDATION', { message: 'Send the match results array.' });
+    // RJ 498: a private match is an exhibition and earns no stats. Its game server never reports one; should it, the
+    // brain, which knows the lobby is private, still writes nothing.
+    if (match.isPrivate(req.lobbyId)) {
+      const ids = req.body.map((e) => (isObject(e) && Number.isInteger(e.user_id) ? e.user_id : null));
+      log.warn(`[match] lobby ${req.lobbyId}: results from a private lobby ignored (${ids.length} entr${ids.length === 1 ? 'y' : 'ies'})`);
+      sendOk(res, { players: [], ignored_user_ids: ids });
+      return;
+    }
     const accepted = [];
     const ignored = [];
+    const named = new Set();
     for (const entry of req.body) {
       const uid = isObject(entry) ? entry.user_id : null;
       if (Number.isInteger(uid) && uid > 0 && isObject(entry.stats) && match.verifiedSeat(req.lobbyId, uid)
         && !accepted.some((e) => e.user_id === uid)) {
-        accepted.push({ user_id: uid, stats: entry.stats });
+        const mode = matchModeOf(entry.mode);
+        if (entry.mode !== undefined) named.add(mode || `${String(JSON.stringify(entry.mode)).slice(0, 40)} (not a mode the brain counts)`);
+        accepted.push(mode ? { user_id: uid, stats: entry.stats, mode } : { user_id: uid, stats: entry.stats });
       } else {
         ignored.push(Number.isInteger(uid) ? uid : null);
       }
+    }
+    if (accepted.length) {
+      const modes = named.size ? [...named].join(', ') : 'none named';
+      log.info(`[match] lobby ${req.lobbyId}: results for ${accepted.length} seated player(s), mode ${modes}`);
     }
     let live = accepted;
     if (accepted.length) {

@@ -49,6 +49,9 @@ Changing any of these here breaks the client or the game server unless Wobble Pl
   Wobble Planet's `docs/backend-realtime.md` documents them.
 - **Server manifest.** `src/match/manifest.js` reads what Wobble Planet's `deploy_server.sh` writes, through
   `Tools/server/server_manifest.py`.
+- **Game mode keys (RJ 585).** `src/contract/matchModes.js`' keys (`stock`, `domination`, `time`) are Wobble Planet's
+  `GameConfig.modeKey()`, which its game server sends in each `/internal/v1/match/results` entry. A mode added there needs
+  its key and a win column here (README, "Wins per game mode (RJ 585)").
 - **Wire protocol.** Wobble Planet owns it (`Scripts/Net/WireProtocol.gd`, bumped by its smoke test); the brain only
   routes on `(wire, fp)`.
 
