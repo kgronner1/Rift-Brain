@@ -4,6 +4,7 @@ const { loadUserStatsColumns, filterSpStatsKeys, quoteColumn, SP_SYNC_CURRENCY_C
 const { applyLegacySpSync } = require('./payloadLedger');
 const log = require('../log');
 const { ELO_DEFAULT_RATING, resolvePlacement, computeEloRatingChanges } = require('./elo');
+const { modeWinColumn } = require('../contract/matchModes');
 
 // user_stats
 // +--------------------------------------------+---------+------+-----+---------+-------+
@@ -26,6 +27,9 @@ const { ELO_DEFAULT_RATING, resolvePlacement, computeEloRatingChanges } = requir
 // | sp_longest_run_sec_alltime                 | float   | YES  |     | 0       |       |
 // | sp_total_time_spent_in_a_run_sec_alltime   | float   | YES  |     | 0       |       |
 // | mp_num_matches_won_alltime                 | int(11) | YES  |     | 0       |       |
+// | mp_num_stock_matches_won_alltime           | int(11) | NO   |     | 0       |       |  RJ 585, 0010
+// | mp_num_domination_matches_won_alltime      | int(11) | NO   |     | 0       |       |  RJ 585, 0010
+// | mp_num_time_matches_won_alltime            | int(11) | NO   |     | 0       |       |  RJ 585, 0010
 // | mp_num_matches_drawed_alltime              | int(11) | YES  |     | 0       |       |
 // | mp_num_matches_lost_alltime                | int(11) | YES  |     | 0       |       |
 // | mp_most_currency_earned_in_a_match         | int(11) | YES  |     | 0       |       |
@@ -63,9 +67,10 @@ function prepareUpdatePlayerStatsStatement(updated_player_stats) {
 }
 
 
-// accepts match_stats, player_stats
+// accepts match_stats, player_stats, and the match's mode as its results entry named it (RJ 585; absent from a game
+// server before it)
 // returns updated_player_stats
-function findUpdatedPlayerStats(match_stats, player_stats) {
+function findUpdatedPlayerStats(match_stats, player_stats, mode = null) {
 
   const updated_player_stats = Object.fromEntries(
     Object.entries(player_stats).map(([key, value]) => [key, { value, new_record: 0 }])
@@ -84,7 +89,13 @@ function findUpdatedPlayerStats(match_stats, player_stats) {
   // outcome
   if (match_stats.matchOutcome == -1) {updated_player_stats.mp_num_matches_lost_alltime.value += 1}
   else if (match_stats.matchOutcome === 0) {updated_player_stats.mp_num_matches_drawed_alltime.value += 1}
-  else if (match_stats.matchOutcome == 1) {updated_player_stats.mp_num_matches_won_alltime.value += 1}
+  else if (match_stats.matchOutcome == 1) {
+    updated_player_stats.mp_num_matches_won_alltime.value += 1;
+    // RJ 585: the same win counts toward its mode (migrations/0010). No mode, or one the brain does not know, counts
+    // toward none; a row without the column (before 0010 runs) is left as it is.
+    const modeColumn = modeWinColumn(mode);
+    if (modeColumn && updated_player_stats[modeColumn] !== undefined) updated_player_stats[modeColumn].value += 1;
+  }
 
   // hits
   updated_player_stats.mp_num_hits_dealt_alltime.value += match_stats.numHits;
@@ -190,7 +201,8 @@ async function computeMatchEloUpdates(db, body) {
 async function postMatchPlayerStatsUpdate(body, { db = getDB() } = {}) {
 
   // body
-  // [{user_id: 1, stats: {currencyDelta: -250, matchOutcome: 1, ...}, {user_id: 2, stats: {currencyDelta: 250, matchOutcome: -1, ...}]
+  // [{user_id: 1, stats: {currencyDelta: -250, matchOutcome: 1, ...}, mode: 'stock'}, {user_id: 2, stats: {currencyDelta: 250, matchOutcome: -1, ...}, mode: 'stock'}]
+  // mode (RJ 585): the match's game mode, src/contract/matchModes.js; absent from a game server before it.
 
   // body.stats
   // "currencyDelta": 0,
@@ -247,7 +259,7 @@ async function postMatchPlayerStatsUpdate(body, { db = getDB() } = {}) {
       }
 
       // create update statement
-      let updated_player_stats = findUpdatedPlayerStats(match_stats, player_stats);
+      let updated_player_stats = findUpdatedPlayerStats(match_stats, player_stats, player.mode);
 
       // Fold in this player's new ELO (if any). mp_elo_rating flows through
       // findUpdatedPlayerStats as a normal column, so we just overwrite its

@@ -68,3 +68,59 @@ test('column labels read as before', () => {
   assert.equal(formatUserStatsColumnName('sp_num_levels_completed_alltime'), 'Number of Levels Completed All Time (Single Player)');
   assert.equal(formatUserStatsColumnName('mp_longest_time_spent_alive_in_a_match_sec'), 'Longest Time Spent Alive in a Match Seconds (Multiplayer)');
 });
+
+// RJ 585: a win counts toward its mode too. The row is one 0010 has run on.
+const { MODE_WIN_COLUMNS, MATCH_MODES, matchModeOf, modeWinColumn } = require('../src/contract/matchModes');
+const MODE_COLS = ['mp_num_stock_matches_won_alltime', 'mp_num_domination_matches_won_alltime', 'mp_num_time_matches_won_alltime'];
+function modeRow() {
+  return { ...row(), ...Object.fromEntries(MODE_COLS.map((c) => [c, 0])) };
+}
+function outcome(matchOutcome) {
+  return {
+    currencyDelta: 0, matchOutcome, numHits: 0, numHitsReceived: 0, numMisses: 0, numKills: 0, numDeathsByOtherPlayers: 0,
+    numDeaths: 0, numUniquePlayersKilled: 0, timeSpentAliveSec: 10, matchDurationSec: 10, numJumps: 1, numItemsStolen: 0,
+    numUniquePlanetsVisited: 1,
+  };
+}
+function modeCounts(out) {
+  return [out.mp_num_matches_won_alltime.value, ...MODE_COLS.map((c) => out[c].value)];
+}
+
+test('RJ 585: the mode keys are the game\'s, each with its own column', () => {
+  assert.deepEqual(MATCH_MODES, ['stock', 'domination', 'time']);
+  assert.deepEqual(Object.values(MODE_WIN_COLUMNS), MODE_COLS);
+  assert.equal(formatUserStatsColumnName('mp_num_domination_matches_won_alltime'), 'Number of Domination Matches Won All Time (Multiplayer)');
+  for (const m of MATCH_MODES) assert.equal(matchModeOf(m), m);
+  for (const bad of [undefined, null, '', 'STOCK', 'Stock', 'DOMINATION', 'ctf', 0, 1, true, {}, [], ['stock'], 'toString', '__proto__', 'hasOwnProperty']) {
+    assert.equal(matchModeOf(bad), null, `${JSON.stringify(bad)} is no mode`);
+    assert.equal(modeWinColumn(bad), null);
+  }
+});
+
+test('RJ 585: a win adds to its mode and the overall count; a loss, a draw, no mode and an unknown mode add to no mode', () => {
+  assert.deepEqual(modeCounts(findUpdatedPlayerStats(outcome(1), modeRow(), 'stock')), [1, 1, 0, 0], 'a STOCK win');
+  assert.deepEqual(modeCounts(findUpdatedPlayerStats(outcome(1), modeRow(), 'domination')), [1, 0, 1, 0], 'a DOMINATION win');
+  assert.deepEqual(modeCounts(findUpdatedPlayerStats(outcome(1), modeRow(), 'time')), [1, 0, 0, 1], 'a TIME win');
+  for (const m of MATCH_MODES) {
+    const loss = findUpdatedPlayerStats(outcome(-1), modeRow(), m);
+    assert.deepEqual(modeCounts(loss), [0, 0, 0, 0], `a ${m} loss`);
+    assert.equal(loss.mp_num_matches_lost_alltime.value, 1);
+    const draw = findUpdatedPlayerStats(outcome(0), modeRow(), m);
+    assert.deepEqual(modeCounts(draw), [0, 0, 0, 0], `a ${m} draw (a tie for 1st)`);
+    assert.equal(draw.mp_num_matches_drawed_alltime.value, 1);
+  }
+  assert.deepEqual(modeCounts(findUpdatedPlayerStats(outcome(1), modeRow())), [1, 0, 0, 0], 'a win reported with no mode (wire 13)');
+  assert.deepEqual(modeCounts(findUpdatedPlayerStats(outcome(1), modeRow(), 'ctf')), [1, 0, 0, 0], 'a mode the brain does not know');
+  assert.deepEqual(modeCounts(findUpdatedPlayerStats(outcome(1), modeRow(), 'STOCK')), [1, 0, 0, 0], 'an on-screen label is not a key');
+
+  const held = { ...modeRow(), mp_num_matches_won_alltime: 9, mp_num_domination_matches_won_alltime: 9 };
+  const tenth = findUpdatedPlayerStats(outcome(1), held, 'domination');
+  assert.deepEqual(tenth.mp_num_domination_matches_won_alltime, { value: 10, new_record: 0 }, 'the answer carries the new count');
+
+  // Before 0010 runs, the row has none of the columns: the win counts as it always did, and no column appears.
+  const old = findUpdatedPlayerStats(outcome(1), row(), 'stock');
+  assert.equal(old.mp_num_matches_won_alltime.value, 1);
+  for (const c of MODE_COLS) assert.equal(c in old, false, c);
+  const stmt = prepareUpdatePlayerStatsStatement(old);
+  assert.equal(stmt.fields.includes('stock'), false, 'no SQL names a column the row lacks');
+});

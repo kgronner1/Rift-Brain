@@ -203,3 +203,78 @@ test('RJ 539: the heartbeat\'s admits_spectators, a boolean when present, over H
   assert.equal((await s.call('POST', '/lobby/heartbeat', { lobby: lobby.id, body: beat(lobby, 'INGAME') })).status, 200);
   assert.equal(lobby.admitsSpectators, false, 'absent: an older server');
 });
+
+test('RJ 585: each entry\'s mode reaches storage when it is a known key; none, or an unknown one, counts toward no mode', async (t) => {
+  const s = await start(t);
+  const { lobby, players } = await seatedLobby(s, 4);
+  for (const p of players) {
+    const seat = [...lobby.seats].find(([, x]) => x.uid === p.uid)[0];
+    assert.equal((await s.call('POST', '/lobby/player-joined', { lobby: lobby.id, body: { user_id: p.uid, seat } })).status, 200);
+  }
+  const [a, b, c, d] = players;
+  const r = await s.call('POST', '/match/results', {
+    lobby: lobby.id,
+    body: [
+      { user_id: a.uid, stats: { matchOutcome: 1 }, mode: 'domination' },
+      { user_id: b.uid, stats: { matchOutcome: -1 }, mode: 'DOMINATION' },
+      { user_id: c.uid, stats: { matchOutcome: 1 }, mode: 7 },
+      { user_id: d.uid, stats: { matchOutcome: 1 } },
+    ],
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.data.ignored_user_ids, []);
+  assert.deepEqual(s.store.calls, [['results', [
+    { user_id: a.uid, stats: { matchOutcome: 1 }, mode: 'domination' },
+    { user_id: b.uid, stats: { matchOutcome: -1 } },
+    { user_id: c.uid, stats: { matchOutcome: 1 } },
+    { user_id: d.uid, stats: { matchOutcome: 1 } },
+  ]]], 'only a known key travels on; an entry without one is today\'s entry exactly');
+  const line = s.lines.find((l) => l.includes(`[match] lobby ${lobby.id}: results for 4 seated player(s)`));
+  assert.ok(line, s.lines.join('\n'));
+  assert.match(line, /mode domination, "DOMINATION" \(not a mode the brain counts\), 7 \(not a mode the brain counts\)$/);
+
+  const old = await s.call('POST', '/match/results', { lobby: lobby.id, body: [{ user_id: a.uid, stats: { matchOutcome: 1 } }] });
+  assert.equal(old.status, 200);
+  assert.deepEqual(s.store.calls[1], ['results', [{ user_id: a.uid, stats: { matchOutcome: 1 } }]], 'a wire-13 report, as it was');
+  assert.ok(s.lines.some((l) => l.endsWith(`[match] lobby ${lobby.id}: results for 1 seated player(s), mode none named`)), s.lines.join('\n'));
+});
+
+test('RJ 585 / RJ 498: a private lobby\'s results are ignored, its seated players\' included, and storage is never called', async (t) => {
+  const s = await start(t);
+  const host = player({ mode: 'create_private' });
+  const made = await s.reg.join(host);
+  assert.equal(made.result, 'queued');
+  const lobby = [...s.reg.lobbies.values()][0];
+  assert.ok(lobby.privateCode, 'the lobby is private');
+  await s.reg.heartbeat(lobby.id, beat(lobby, 'PREGAME'));
+  const ready = s.reg.poll(made.queued.ticket, host.install);
+  assert.equal(ready.result, 'ok', JSON.stringify(ready));
+  const seat = [...lobby.seats].find(([, x]) => x.uid === host.uid)[0];
+  assert.equal((await s.call('POST', '/lobby/player-joined', { lobby: lobby.id, body: { user_id: host.uid, seat } })).status, 200);
+  assert.equal(s.reg.verifiedSeat(lobby.id, host.uid), true, 'the measurement: a public lobby would count this player');
+  assert.equal(s.reg.isPrivate(lobby.id), true);
+
+  const r = await s.call('POST', '/match/results', { lobby: lobby.id, body: [{ user_id: host.uid, stats: { matchOutcome: 1 }, mode: 'stock' }] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.data, { players: [], ignored_user_ids: [host.uid] });
+  assert.deepEqual(s.store.calls, [], 'nothing written');
+  assert.ok(s.lines.some((l) => l.includes(`[match] lobby ${lobby.id}: results from a private lobby ignored (1 entry)`)), s.lines.join('\n'));
+
+  // A restarted brain adopts it from a heartbeat naming its code, and ignores its results the same way.
+  const again = await start(t, makeRegistry({ clock: s.clock, bootGraceMs: 30000, logger: quietLogger() }));
+  assert.equal((await again.call('POST', '/lobby/heartbeat', { lobby: lobby.id, body: beat(lobby, 'INGAME') })).status, 200);
+  assert.equal(again.reg.verifiedSeat(lobby.id, host.uid), true, 'adopted with its seat');
+  assert.equal(again.reg.isPrivate(lobby.id), true, 'adopted as private');
+  const r2 = await again.call('POST', '/match/results', { lobby: lobby.id, body: [{ user_id: host.uid, stats: { matchOutcome: 1 }, mode: 'stock' }] });
+  assert.deepEqual(r2.body.data, { players: [], ignored_user_ids: [host.uid] });
+  assert.deepEqual(again.store.calls, []);
+
+  // A public lobby's are not (the same call, the same player shape).
+  const pub = await start(t);
+  const { lobby: open, players: [p] } = await seatedLobby(pub, 1);
+  const pseat = [...open.seats].find(([, x]) => x.uid === p.uid)[0];
+  await pub.call('POST', '/lobby/player-joined', { lobby: open.id, body: { user_id: p.uid, seat: pseat } });
+  assert.equal(pub.reg.isPrivate(open.id), false);
+  await pub.call('POST', '/match/results', { lobby: open.id, body: [{ user_id: p.uid, stats: { matchOutcome: 1 }, mode: 'stock' }] });
+  assert.equal(pub.store.calls.length, 1);
+});

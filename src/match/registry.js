@@ -922,6 +922,13 @@ function createMatchRegistry({
     });
   }
 
+  // Whether lobby <lobbyId> is a private one (RJ 498: its matches earn no stats): spawned for create_private, or adopted
+  // from a heartbeat naming its code.
+  function isPrivate(lobbyId) {
+    const lobby = lobbies.get(lobbyId);
+    return !!lobby && !!lobby.privateCode;
+  }
+
   // Whether user <uid> holds a seat (reserved or taken) or a ticket: the guest cull (RJ 493) passes such a player by.
   function holds(uid) {
     for (const lobby of lobbies.values()) {
@@ -932,7 +939,7 @@ function createMatchRegistry({
   }
 
   return {
-    join, poll, leave, heartbeat, playerJoined, playerLeft, verifiedSeat, sweep, drain,
+    join, poll, leave, heartbeat, playerJoined, playerLeft, verifiedSeat, isPrivate, sweep, drain,
     releasePlayer: dropPlayer,
     holds,
     inGrace,
